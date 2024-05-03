@@ -5,7 +5,10 @@ description = "Minimal implementation of mixture-of-depths on nanoGPT"
 authors = [
     {name = "Eduardo Pacheco", email = "pacheco.eduardo.silva@gmail.com"},
 ]
-dependencies = []
+dependencies = [
+    "transformers>=4.40.1",
+    "wandb>=0.16.6",
+]
 requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
