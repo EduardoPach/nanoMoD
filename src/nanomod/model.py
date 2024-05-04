@@ -126,6 +126,7 @@ class MoDBlock(nn.Module):
         # Calculate router logits and weights
         router_logits = self.router(x)
         router_logits = router_logits.squeeze(-1) # (batch_size, seq_len)
+        # Applying softmax to all tokens as in paper it was mentioned that topk is same as in ColT5
         router_weights = F.softmax(router_logits, dim=-1)
 
         # Select compute tokens
@@ -136,6 +137,7 @@ class MoDBlock(nn.Module):
 
         # Process compute tokens and multiply by router weights
         compute_tokens = compute_tokens + self.attn(self.ln_1(compute_tokens))
+        # Multiply router weights before adding residual
         compute_tokens = compute_tokens + self.mlp(self.ln_2(compute_tokens)) * selected_weights.unsqueeze(-1)
 
         # Merge compute and non-compute tokens
