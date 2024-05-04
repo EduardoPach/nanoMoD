@@ -154,6 +154,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     capacity_ratio: float = 0.5
+    use_mod: bool = True
 
 class GPT(nn.Module):
 
@@ -164,13 +165,18 @@ class GPT(nn.Module):
         self.config = config
 
         # Should use MoDBlock every other layer starting from the second layer
-        self.mod_idxs = [i for i in range(config.n_layer) if i % 2 != 0]
+        self.mod_idxs = None
+        if config.use_mod:
+            self.mod_idxs = [i for i in range(config.n_layer) if i % 2 != 0]
+            h_layers = nn.ModuleList([Block(config) if i not in self.mod_idxs else MoDBlock(config) for i in range(config.n_layer)])
+        else:
+            h_layers = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) if i not in self.mod_idxs else MoDBlock(config) for i in range(config.n_layer)]),
+            h = h_layers,
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -225,7 +231,7 @@ class GPT(nn.Module):
         all_selected_indices = ()
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
-            if layer_idx in self.mod_idxs:
+            if self.config.use_mod and layer_idx in self.mod_idxs:
                 x, router_logits, selected_indices = x
                 all_router_logits += (router_logits,)
                 all_selected_indices += (selected_indices,)
@@ -235,8 +241,9 @@ class GPT(nn.Module):
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            aux_loss = self.compute_aux_loss(all_router_logits, all_selected_indices, t)
-            loss += aux_loss
+            if self.config.use_mod:
+                aux_loss = self.compute_aux_loss(all_router_logits, all_selected_indices, t)
+                loss += aux_loss
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim

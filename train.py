@@ -39,10 +39,6 @@ eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
-# wandb logging
-wandb_log = False # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
@@ -51,8 +47,14 @@ block_size = 1024
 n_layer = 12
 n_head = 12
 n_embd = 768
+use_mod = True
+capacity_ratio = 0.5
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+# wandb logging
+wandb_log = False # disabled by default
+wandb_project = 'owt'
+wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -144,7 +146,7 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, use_mod=use_mod, capacity_ratio=capacity_ratio) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -243,6 +245,7 @@ def get_lr(it):
 # logging
 if wandb_log and master_process:
     import wandb
+    name = wandb_run_name+"-baseline" if not use_mod else wandb_run_name+"-mod"
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
