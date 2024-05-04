@@ -40,7 +40,7 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # data
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
+gradient_accumulation_steps = 5 * 4 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # model
@@ -246,7 +246,7 @@ def get_lr(it):
 if wandb_log and master_process:
     import wandb
     name = wandb_run_name+"-baseline" if not use_mod else wandb_run_name+"-mod"
-    wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+    wandb.init(project=wandb_project, name=name, config=config)
 
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
@@ -254,6 +254,7 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
+tokens_seen = 0
 while True:
 
     # determine and set the learning rate for this iteration
@@ -269,6 +270,7 @@ while True:
             wandb.log({
                 "iter": iter_num,
                 "train/loss": losses['train'],
+                "tokens_seen": iter_num * tokens_per_iter,
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
