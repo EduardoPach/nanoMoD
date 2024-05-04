@@ -2,7 +2,11 @@
 
 This is an attempt to reproduce the `Mixture-of-Depths` strategy to dynamically allocate compute when training LLMs introduced at the [Mixture-of-Depths: Dynamically allocating compute in transformer-based language models](https://arxiv.org/abs/2404.02258) paper based on [Karpathy nanoGPT](https://github.com/karpathy/nanoGPT/tree/master).
 
-<img src="assets/mod_image.png" alt="Description of the image" style="width:60%;">
+
+To reproduce the work on this repo you can install the appropriate `Pytorch` version to your hardware and do `pip install -e .` or if you use `pdm` do `pdm install`. You can then change configurations related to the training in `config/train_gpt2.py` and run `python train.py config/train_gpt2.py`
+
+
+<img src="assets/mod_image.png" alt="Description of the image" style="width:80%;">
 
 
 ## Paper TL;DR
@@ -81,7 +85,7 @@ Cons:
 
 For the reproduction two `GPT2` models (124M parameters version) were trained with and without `MoD` on the `Shakespeare` dataset found in the `data` directory. You can see the full training logs [here](https://wandb.ai/eduardopacheco/mod-gpt-shakespeare?nw=nwusereduardopacheco), below is the training loss curve.
 
-<img src="assets/wandb_curves.png" alt="Description of the image" style="width:60%;">
+<img src="assets/wandb_curves.png" alt="Description of the image" style="width:80%;">
 
 
 The running configs were the same the only difference was the presence of `MoD`. Both models were trained for 750 iterations (`MoD` model took 21 minutes and `Baseline` took 24 minutes on 4x RTX 3090). 
