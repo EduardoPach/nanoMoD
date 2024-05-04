@@ -47,7 +47,7 @@ block_size = 1024
 n_layer = 12
 n_head = 12
 n_embd = 768
-use_mod = True
+use_mod = False
 capacity_ratio = 0.5
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
@@ -287,7 +287,16 @@ while True:
                     'config': config,
                 }
                 print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                ckpt_path = os.path.join(out_dir, "ckpt.pt")
+                torch.save(checkpoint, ckpt_path)
+                if wandb_log:
+                    artifact = wandb.Artifact(f"model-ckpt-iter-{iter_num}", type='model', metadata={
+                        'Validationscore': best_val_loss,
+                        'tokens_seen': iter_num * tokens_per_iter
+                    })
+                    artifact.add_file(ckpt_path)
+                    wandb.run.log_artifact(artifact)
+
     if iter_num == 0 and eval_only:
         break
 
