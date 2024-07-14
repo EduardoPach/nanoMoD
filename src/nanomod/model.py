@@ -157,6 +157,7 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     capacity_ratio: float = 0.5
     use_mod: bool = True
+    mod_freq: int = 2
 
 class GPT(nn.Module):
 
@@ -169,7 +170,7 @@ class GPT(nn.Module):
         # Should use MoDBlock every other layer starting from the second layer
         self.mod_idxs = None
         if config.use_mod:
-            self.mod_idxs = [i for i in range(config.n_layer) if i % 2 != 0]
+            self.mod_idxs = [i for i in range(config.n_layer) if i % config.mod_freq != 0]
             h_layers = nn.ModuleList([Block(config) if i not in self.mod_idxs else MoDBlock(config) for i in range(config.n_layer)])
         else:
             h_layers = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
