@@ -1,7 +1,9 @@
-from contextlib import nullcontext
+import time
 from typing import Tuple
+from contextlib import nullcontext
 
 import torch
+import wandb
 
 from nanomod.model import GPTConfig
 
@@ -76,6 +78,7 @@ def estimate_loss(
     dataloader: torch.utils.data.DataLoader, 
     eval_iterations: int, ctx: torch.cuda.amp.autocast | nullcontext
 ) -> float:
+    device = next(model.parameters()).device
     model.eval()
     total_loss = 0
     for i, (inputs, targets) in enumerate(dataloader):
@@ -101,19 +104,21 @@ def log_metrics(
     throughput: float,
 ) -> None:
     model.eval()
+    num_params = model.get_num_params()
     train_loss = estimate_loss(model, train_loader, eval_iterations, ctx)
     val_loss = estimate_loss(model, val_loader, eval_iterations, ctx)
     model.train()
 
     wandb.log(
         {
-            "train_loss": train_loss,
-            "val_loss": val_loss,
+            "train/loss": train_loss,
+            "val/loss": val_loss,
             "step": step,
             "tokens_seen": tokens_per_step * (step + 1),
             "total_flops": flops_per_forward * (step + 1),
             "latency": latency,
             "tokens_per_sec": throughput,
+            "num_params": num_params,
         }
     )
 
@@ -127,7 +132,7 @@ def train_step(
 ) -> Tuple[float, float, float]:
     model.train()
     inputs, targets = next(iter(dataloader))
-    inputs, targets = x.to(device), y.to(device)
+    inputs, targets = inputs.to(device), targets.to(device)
     optimizer.zero_grad()
     is_cuda = device.type == "cuda"
 

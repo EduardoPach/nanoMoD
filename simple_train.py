@@ -34,7 +34,7 @@ def set_config_store() -> None:
     cs.store(name="config", node=ExperimentConfig)
 
 
-def get_train_context_and_scaler(cfg: ExperimentConfig) -> Tuple[torch.cuda.amp.autocast, torch.cuda.amp.GradScaler]:
+def get_train_context_and_scaler(cfg: ExperimentConfig, device: torch.device) -> Tuple[torch.cuda.amp.autocast, torch.cuda.amp.GradScaler]:
     dtype = torch.float32 if not cfg.train.use_fp16 else (torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16)
     return torch.cuda.amp.autocast(enabled=(cfg.train.use_fp16 and device.type == "cuda"), dtype=dtype), torch.cuda.amp.GradScaler(enabled=cfg.train.use_fp16)
     
@@ -46,19 +46,20 @@ def train(cfg: ExperimentConfig) -> None:
     device = utils.get_best_device()
     model = GPT(cfg.model)
     model.train()
-    train_ctx, scaler = get_train_context_and_scaler(cfg)
+    train_ctx, scaler = get_train_context_and_scaler(cfg, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr)
     train_loader, val_loader = get_dataloaders(cfg.data)
 
     num_steps = len(train_loader) * cfg.train.epochs
     flops_per_forward = utils.total_flops(cfg.model)
-    tokens_per_step = cfg.data.batch_size * cfg.data_seq_len
+    tokens_per_step = cfg.data.batch_size * cfg.data.seq_len
     wandb_mode = "online" if cfg.train.use_wandb else "disabled"
 
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"GPT Training: Step 0 - Loss: NaN")
-    print(cfg)
+    accum_latency = 0
+    accum_throughput = 0
 
-    with wandb.init(project="nanoMoD", config=cfg, entity="wandb", job_type="train", mode=wandb_mode) as run:
+    with wandb.init(project="nanoMoD", config=dict(cfg), job_type="train", mode=wandb_mode) as run:
         for step in pbar:
             latency, tokens_per_sec, loss = utils.train_step(
                 model=model,
@@ -69,7 +70,13 @@ def train(cfg: ExperimentConfig) -> None:
                 scaler=scaler,
             )
 
-            pbar.set_description(f"GPT Training: Step {step} - Loss: {loss:.4f} - Latency: {latency:.2f} - Throughput: {tokens_per_sec:.2f}")
+            accum_latency += latency
+            accum_throughput += tokens_per_sec
+
+            avg_latency = accum_latency / (step + 1)
+            avg_throughput = accum_throughput / (step + 1)
+
+            pbar.set_description(f"GPT Training: Step {step} - Loss: {loss:.4f} - Latency: {avg_latency:.2f} - Throughput: {avg_throughput:.2f}")
 
             if step % cfg.train.log_interval:
                 utils.log_metrics(
@@ -81,8 +88,8 @@ def train(cfg: ExperimentConfig) -> None:
                     step=step,
                     tokens_per_step=tokens_per_step,
                     flops_per_forward=flops_per_forward,
-                    latency=latency,
-                    throughput=tokens_per_sec,
+                    latency=avg_latency,
+                    throughput=avg_throughput,
                 )
 
 

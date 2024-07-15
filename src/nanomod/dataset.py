@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
+import os
 from typing import Optional, Tuple
+from dataclasses import dataclass, field
 
 import torch
 import numpy as np
@@ -19,8 +20,8 @@ class OpenWebText(torch.utils.data.Dataset):
         self.seq_len = seq_len
         self.num_tokens = num_tokens
         self.data = np.memmap(os.path.join(root, f"{split}.bin"), dtype=np.uint16, mode='r')
-        self.indices = self._set_indices()
         self.seed = seed
+        self.indices = self._set_indices()
 
     def _set_indices(self):
         np.random.seed(self.seed)
@@ -30,13 +31,13 @@ class OpenWebText(torch.utils.data.Dataset):
             return np.random.randint(0, len(self.data) - self.seq_len, self.num_tokens // self.seq_len)
 
     def __len__(self) -> int:
-        return len(self.intices)
+        return len(self.indices)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         idx = self.indices[idx]
         x = self.data[idx:idx+self.seq_len]
         y = self.data[idx+1:idx+self.seq_len+1]
-        return torch.from_numpy(x.astypep(np.int64)), torch.from_numpy(y.astype(np.int64))
+        return torch.from_numpy(x.astype(np.int64)), torch.from_numpy(y.astype(np.int64))
 
 def get_dataloaders(cfg: DataConfig) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     train_dataset = OpenWebText("train", cfg.seq_len, cfg.num_tokens)
