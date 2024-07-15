@@ -7,7 +7,7 @@ wandb
 out
 # C extensions
 *.so
-
+outputs
 # Distribution / packaging
 .Python
 build/

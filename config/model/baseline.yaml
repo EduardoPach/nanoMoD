@@ -1,0 +1,10 @@
+block_size: 256
+vocab_size: 50304
+n_layer: 6
+n_head: 6
+n_embd: 384
+dropout: 0.0
+bias: true
+use_mod: false
+capacity_ratio: 0.5
+mod_freq: 2
