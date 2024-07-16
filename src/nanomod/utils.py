@@ -1,5 +1,6 @@
 import time
-from typing import Tuple
+import math
+from typing import Tuple, Optional
 from contextlib import nullcontext
 
 import torch
@@ -122,18 +123,39 @@ def log_metrics(
         }
     )
 
+# learning rate decay scheduler (cosine with warmup)
+def set_learning_rate(optimizer: torch.optim.Optimizer, step: int, warmup_iters: int, lr_decay_iters: int, learning_rate: float, min_lr: float) -> float:
+    # 1) linear warmup for warmup_iters steps
+    if step < warmup_iters:
+        return learning_rate * step / warmup_iters
+    # 2) if it > lr_decay_iters, return min learning rate
+    if step > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (step - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    new_lr =  min_lr + coeff * (learning_rate - min_lr)
+
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = new_lr
+
+    return new_lr
+
+
 def train_step(
     model: torch.nn.Module, 
     optimizer: torch.optim.Optimizer, 
     dataloader: torch.utils.data.DataLoader, 
     device: torch.device, 
     train_ctx: torch.cuda.amp.autocast | nullcontext,
-    scaler: torch.cuda.amp.GradScaler
+    scaler: torch.cuda.amp.GradScaler,
+    grad_clip: Optional[float] = None
 ) -> Tuple[float, float, float]:
     model.train()
     inputs, targets = next(iter(dataloader))
     inputs, targets = inputs.to(device), targets.to(device)
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     is_cuda = device.type == "cuda"
 
     # Ugly, but we need to measure latency and throughput
@@ -157,7 +179,12 @@ def train_step(
     throughput = inputs.size(0) * inputs.size(1) / latency # tokens per second
 
     scaler.scale(loss).backward()
+    if grad_clip is not None:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
     scaler.step(optimizer)
     scaler.update()
 
     return latency, throughput, loss.item()
+

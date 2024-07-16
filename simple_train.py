@@ -22,6 +22,12 @@ class TrainConfig:
     eval_iterations: int = field(default=100)
     use_wandb: bool = field(default=False)
     use_fp16: bool = field(default=False)
+    weight_decay: float = field(default=1e-1)
+    beta1: float = field(default=0.9)
+    beta2: float = field(default=0.95)
+    warmup_iters: int = field(default=1000)
+    min_lr: float = field(default=6e-5)
+    grad_clip: float = field(default=1.0)
 
 @dataclass
 class ExperimentConfig:
@@ -45,9 +51,10 @@ def train(cfg: ExperimentConfig) -> None:
 
     device = utils.get_best_device()
     model = GPT(cfg.model)
+    model.to(device)
     model.train()
     train_ctx, scaler = get_train_context_and_scaler(cfg, device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr)
+    optimizer = model.configure_optimizers(cfg.train.weight_decay, cfg.train.lr, (cfg.train.beta1, cfg.train.beta2), device)
     train_loader, val_loader = get_dataloaders(cfg.data)
 
     num_steps = len(train_loader) * cfg.train.epochs
@@ -58,9 +65,19 @@ def train(cfg: ExperimentConfig) -> None:
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"GPT Training: Step 0 - Loss: NaN")
     accum_latency = 0
     accum_throughput = 0
+    lr = cfg.train.lr
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="train", mode=wandb_mode) as run:
         for step in pbar:
+            lr = utils.set_learning_rate(
+                optimizer=optimizer,
+                step=step,
+                warmup_iters=cfg.train.warmup_iters,
+                lr_decay_iters=int(num_steps * 0.9),
+                learning_rate=lr,
+                min_lr=cfg.train.min_lr
+            )
+
             latency, tokens_per_sec, loss = utils.train_step(
                 model=model,
                 optimizer=optimizer,
@@ -68,6 +85,7 @@ def train(cfg: ExperimentConfig) -> None:
                 device=device,
                 train_ctx=train_ctx,
                 scaler=scaler,
+                grad_clip=cfg.train.grad_clip
             )
 
             accum_latency += latency
@@ -78,7 +96,7 @@ def train(cfg: ExperimentConfig) -> None:
 
             pbar.set_description(f"GPT Training: Step {step} - Loss: {loss:.4f} - Latency: {avg_latency:.2f} - Throughput: {avg_throughput:.2f}")
 
-            if step % cfg.train.log_interval:
+            if step % cfg.train.log_interval == 0:
                 utils.log_metrics(
                     model=model,
                     ctx=train_ctx,

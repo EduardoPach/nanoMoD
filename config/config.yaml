@@ -9,7 +9,6 @@ data:
   num_workers: 4
   pin_memory: true
 train:
-  lr: 1e-3 
   epochs: 2
   log_interval: 200
   eval_iterations: 200
