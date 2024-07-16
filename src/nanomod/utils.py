@@ -5,6 +5,7 @@ from contextlib import nullcontext
 
 import torch
 import wandb
+import pandas as pd
 
 from nanomod.model import GPTConfig
 
@@ -114,10 +115,17 @@ def log_metrics(
     wandb.log(log_dict)
 
 # learning rate decay scheduler (cosine with warmup)
-def set_learning_rate(optimizer: torch.optim.Optimizer, step: int, warmup_iters: int, lr_decay_iters: int, learning_rate: float, min_lr: float) -> float:
+def set_learning_rate(
+    optimizer: torch.optim.Optimizer, 
+    step: int, 
+    warmup_iters: int, 
+    lr_decay_iters: int, 
+    max_learning_rate: float, 
+    min_lr: float
+) -> float:
     # 1) linear warmup for warmup_iters steps
     if step < warmup_iters:
-        return learning_rate * step / warmup_iters
+        return max_learning_rate * step / warmup_iters
     # 2) if it > lr_decay_iters, return min learning rate
     if step > lr_decay_iters:
         return min_lr
@@ -125,7 +133,7 @@ def set_learning_rate(optimizer: torch.optim.Optimizer, step: int, warmup_iters:
     decay_ratio = (step - warmup_iters) / (lr_decay_iters - warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    new_lr =  min_lr + coeff * (learning_rate - min_lr)
+    new_lr =  min_lr + coeff * (max_learning_rate - min_lr)
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = new_lr
@@ -179,8 +187,7 @@ def train_step(
     return latency, throughput, loss.item()
 
 def log_table(**kwargs) -> None:
-    num_params = model.get_num_params()
-    data = {"num_params": num_params}
-    data.update(kwargs)
-    df = pd.DataFrame([data])
+    if kwargs is None:
+        return
+    df = pd.DataFrame([kwargs])
     wandb.log({"table": wandb.Table(dataframe=df)})

@@ -1,4 +1,3 @@
-import time
 from typing import Tuple, List
 from dataclasses import dataclass, field
 from contextlib import nullcontext
@@ -6,7 +5,6 @@ from contextlib import nullcontext
 import wandb
 import torch
 import hydra
-import pandas as pd
 from tqdm import tqdm
 from hydra.core.config_store import ConfigStore
 
@@ -26,7 +24,9 @@ class TrainConfig:
     weight_decay: float = field(default=1e-1)
     beta1: float = field(default=0.9)
     beta2: float = field(default=0.95)
-    warmup_iters: int = field(default=1000)
+    warmup_iters: float = field(default=0.1)
+    decay_iter: float = field(default=0.9)
+
     min_lr: float = field(default=6e-5)
     grad_clip: float = field(default=1.0)
 
@@ -55,23 +55,22 @@ def train(cfg: ExperimentConfig) -> None:
     model.to(device)
     model.train()
     train_ctx, scaler = get_train_context_and_scaler(cfg, device)
-    optimizer = model.configure_optimizers(cfg.train.weight_decay, cfg.train.lr, (cfg.train.beta1, cfg.train.beta2), device)
+    optimizer = model.configure_optimizers(cfg.train.weight_decay, cfg.train.lr, (cfg.train.beta1, cfg.train.beta2), device.type)
     train_loader, val_loader = get_dataloaders(cfg.data)
 
     num_steps = len(train_loader) * cfg.train.epochs
-    flops_per_forward = utils.total_flops(cfg.model)
+    flops_per_forward = utils.total_flops(cfg.model) * cfg.data.batch_size
     tokens_per_step = cfg.data.batch_size * cfg.data.seq_len
     wandb_mode = "online" if cfg.train.use_wandb else "disabled"
 
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"GPT Training: Step 0 - Loss: NaN")
     accum_latency = 0
     accum_throughput = 0
-    lr = cfg.train.lr
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="train", mode=wandb_mode) as run:
         utils.log_table(
+            num_params=model.get_num_params(),
             flops_per_forward=flops_per_forward, 
-            num_params=model.num_parameters(), 
             tokens_per_step=tokens_per_step, 
             use_mod=cfg.model.use_mod,
             capacity_ratio=cfg.model.capacity_ratio,
@@ -84,9 +83,9 @@ def train(cfg: ExperimentConfig) -> None:
             lr = utils.set_learning_rate(
                 optimizer=optimizer,
                 step=step,
-                warmup_iters=cfg.train.warmup_iters,
-                lr_decay_iters=int(num_steps * 0.9),
-                learning_rate=lr,
+                warmup_iters=(num_steps * cfg.train.warmup_iters),
+                lr_decay_iters=int(num_steps * cfg.train.decay_iter),
+                max_learning_rate=cfg.train.lr,
                 min_lr=cfg.train.min_lr
             )
 
@@ -110,7 +109,7 @@ def train(cfg: ExperimentConfig) -> None:
 
             pbar.set_description(f"GPT Training: Step {step} - Loss: {loss:.4f} - Latency: {avg_latency:.2f} - Throughput: {avg_throughput:.2f}")
 
-            if (step+1) % cfg.train.log_interval == 0:
+            if ((step+1) % cfg.train.log_interval) == 0:
                 utils.log_metrics(
                     model=model,
                     ctx=train_ctx,
@@ -119,7 +118,7 @@ def train(cfg: ExperimentConfig) -> None:
                     eval_iterations=cfg.train.eval_iterations,
                     step=step,
                     tokens_seen=(tokens_per_step * (step + 1)),
-                    total_flops=flops_per_forward,
+                    total_flops=(flops_per_forward * (step + 1)),
                     latency=avg_latency,
                     tokens_per_sec=avg_throughput,
                     lr=lr
