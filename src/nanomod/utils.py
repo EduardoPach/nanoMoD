@@ -98,30 +98,20 @@ def log_metrics(
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader,
     eval_iterations: int,
-    step: int,
-    tokens_per_step: int,
-    flops_per_forward: int,
-    latency: float,
-    throughput: float,
+    **kwargs
 ) -> None:
     model.eval()
-    num_params = model.get_num_params()
     train_loss = estimate_loss(model, train_loader, eval_iterations, ctx)
     val_loss = estimate_loss(model, val_loader, eval_iterations, ctx)
     model.train()
 
-    wandb.log(
-        {
-            "train/loss": train_loss,
-            "val/loss": val_loss,
-            "step": step,
-            "tokens_seen": tokens_per_step * (step + 1),
-            "total_flops": flops_per_forward * (step + 1),
-            "latency": latency,
-            "tokens_per_sec": throughput,
-            "num_params": num_params,
-        }
-    )
+    log_dict = {
+        "train/loss": train_loss,
+        "val/loss": val_loss
+    }
+    log_dict.update(kwargs)
+
+    wandb.log(log_dict)
 
 # learning rate decay scheduler (cosine with warmup)
 def set_learning_rate(optimizer: torch.optim.Optimizer, step: int, warmup_iters: int, lr_decay_iters: int, learning_rate: float, min_lr: float) -> float:
@@ -188,3 +178,9 @@ def train_step(
 
     return latency, throughput, loss.item()
 
+def log_table(**kwargs) -> None:
+    num_params = model.get_num_params()
+    data = {"num_params": num_params}
+    data.update(kwargs)
+    df = pd.DataFrame([data])
+    wandb.log({"table": wandb.Table(dataframe=df)})

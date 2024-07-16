@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import wandb
 import torch
 import hydra
+import pandas as pd
 from tqdm import tqdm
 from hydra.core.config_store import ConfigStore
 
@@ -68,6 +69,17 @@ def train(cfg: ExperimentConfig) -> None:
     lr = cfg.train.lr
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="train", mode=wandb_mode) as run:
+        utils.log_table(
+            flops_per_forward=flops_per_forward, 
+            num_params=model.num_parameters(), 
+            tokens_per_step=tokens_per_step, 
+            use_mod=cfg.model.use_mod,
+            capacity_ratio=cfg.model.capacity_ratio,
+            num_layers=cfg.model.n_layer,
+            num_heads=cfg.model.n_head,
+            hidden_size=cfg.model.n_embd,
+            seq_len=cfg.model.block_size
+        )
         for step in pbar:
             lr = utils.set_learning_rate(
                 optimizer=optimizer,
@@ -88,15 +100,17 @@ def train(cfg: ExperimentConfig) -> None:
                 grad_clip=cfg.train.grad_clip
             )
 
-            accum_latency += latency
-            accum_throughput += tokens_per_sec
+            # Warming up the latency and throughput metrics
+            if step + 1 >= 10:
+                accum_latency += latency
+                accum_throughput += tokens_per_sec
 
             avg_latency = accum_latency / (step + 1)
             avg_throughput = accum_throughput / (step + 1)
 
             pbar.set_description(f"GPT Training: Step {step} - Loss: {loss:.4f} - Latency: {avg_latency:.2f} - Throughput: {avg_throughput:.2f}")
 
-            if step % cfg.train.log_interval == 0:
+            if (step+1) % cfg.train.log_interval == 0:
                 utils.log_metrics(
                     model=model,
                     ctx=train_ctx,
@@ -104,10 +118,11 @@ def train(cfg: ExperimentConfig) -> None:
                     val_loader=val_loader,
                     eval_iterations=cfg.train.eval_iterations,
                     step=step,
-                    tokens_per_step=tokens_per_step,
-                    flops_per_forward=flops_per_forward,
+                    tokens_seen=(tokens_per_step * (step + 1)),
+                    total_flops=flops_per_forward,
                     latency=avg_latency,
-                    throughput=avg_throughput,
+                    tokens_per_sec=avg_throughput,
+                    lr=lr
                 )
 
 
