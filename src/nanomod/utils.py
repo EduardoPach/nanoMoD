@@ -1,5 +1,7 @@
+import os
 import time
 import math
+from dataclasses import asdict
 from typing import Tuple, Optional
 from contextlib import nullcontext
 
@@ -8,8 +10,8 @@ import wandb
 import pandas as pd
 from hydra.core.config_store import ConfigStore
 
-from nanomod.model import GPTConfig, DartsBlock
-from nanomod.dataset import DataConfig
+from nanomod.model import DartsBlock
+from nanomod.configuration import ExperimentConfig, GPTConfig
 
 def get_best_device() -> torch.device:
     if torch.cuda.is_available():
@@ -95,6 +97,29 @@ def estimate_loss(
     return total_loss / eval_iterations
 
 
+def log_model(
+    model: torch.nn.Module, 
+    optimizer: torch.optim.Optimizer,
+    model_config: GPTConfig,
+    output_dir: str = "checkpoint_dir", 
+    **kwargs
+) -> None:
+    checkpoint = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'model_config': asdict(model_config),
+    }
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    ckpt_path = os.path.join(output_dir, "ckpt.pt")
+    torch.save(checkpoint, ckpt_path)
+    artifact = wandb.Artifact(f"model-ckpt", type='model', metadata=kwargs)
+    artifact.add_file(ckpt_path)
+    wandb.run.log_artifact(artifact)
+
+
 def log_metrics(
     model: torch.nn.Module,
     ctx: torch.cuda.amp.autocast | nullcontext,
@@ -142,6 +167,12 @@ def set_learning_rate(
 
     return new_lr
 
+def get_train_context_and_scaler(
+    cfg: ExperimentConfig, 
+    device: torch.device
+) -> Tuple[torch.cuda.amp.autocast, torch.cuda.amp.GradScaler]:
+    dtype = torch.float32 if not cfg.train.use_fp16 else (torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16)
+    return torch.cuda.amp.autocast(enabled=(cfg.train.use_fp16 and device.type == "cuda"), dtype=dtype), torch.cuda.amp.GradScaler(enabled=cfg.train.use_fp16)
 
 def train_step(
     model: torch.nn.Module, 
@@ -208,32 +239,6 @@ def log_capacity_ratio_profile(model: torch.nn.Module) -> None:
     
     df = pd.DataFrame({"Block Index": block_idxs, "Capacity Ratio": capacity_ratios})
     wandb.log({"capacity_ratio_profile": wandb.Table(dataframe=df)})
-
-@dataclass
-class TrainConfig:
-    lr: float = field(default=6e-4) 
-    epochs: int = field(default=2)
-    log_interval: int = field(default=100)
-    eval_iterations: int = field(default=100)
-    use_wandb: bool = field(default=False)
-    use_fp16: bool = field(default=False)
-    weight_decay: float = field(default=1e-1)
-    beta1: float = field(default=0.9)
-    beta2: float = field(default=0.95)
-    warmup_iters: float = field(default=0.1)
-    decay_iter: float = field(default=0.9)
-    min_lr: float = field(default=6e-5)
-    grad_clip: float = field(default=1.0)
-
-@dataclass
-class ExperimentConfig:
-    model: GPTConfig = field(default_factory=GPTConfig)
-    data: DataConfig = field(default_factory=DataConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
-
-def set_config_store() -> None:
-    cs = ConfigStore.instance()
-    cs.store(name="config", node=ExperimentConfig)
 
 def get_compute_loss(model: torch.nn.Module):
     """Compute the avg normalized FLOPs for the model to induce a loss on compute."""

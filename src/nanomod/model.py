@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+from nanomod.configuration import GPTConfig
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -168,7 +170,7 @@ class DartsBlock(nn.Module):
         self.alphas = nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
 
         blocks = []
-        for capacity_ratio in capacity_ratio_search_space:
+        for capacity_ratio in self.capacity_ratio_search_space:
             _config = copy.deepcopy(config)
             setattr(_config, 'capacity_ratio', capacity_ratio)
             block = MoDBlock(config)
@@ -184,20 +186,6 @@ class DartsBlock(nn.Module):
             output += weight * block(x)
         
         return output
-
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    capacity_ratio: float = 0.5
-    use_mod: bool = True
-    mod_freq: int = 2
-    use_darts: bool = False
 
 class GPT(nn.Module):
 

@@ -5,13 +5,7 @@ from dataclasses import dataclass, field
 import torch
 import numpy as np
 
-@dataclass
-class DataConfig:
-    seq_len: int = field(default=256)
-    num_tokens: Optional[int] = field(default=None)
-    batch_size: int = field(default=64)
-    num_workers: int = field(default=4)
-    pin_memory: bool = field(default=True)
+from nanomod.configuration import DataConfig
 
 class OpenWebText(torch.utils.data.Dataset):
     def __init__(self, split: str, seq_len: int, num_tokens: Optional[int] = None, seed: int = 13) -> None:

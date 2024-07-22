@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .pdm-python
 wandb
+checkpoint_dir
 out
 # C extensions
 *.so

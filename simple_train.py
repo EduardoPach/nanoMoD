@@ -1,31 +1,21 @@
-from typing import Tuple, List
-from dataclasses import dataclass, field
-from contextlib import nullcontext
-
 import wandb
-import torch
 import hydra
 from tqdm import tqdm
 
+from nanomod import utils
 from nanomod.model import GPT
 from nanomod.dataset import get_dataloaders
-from nanomod import utils
-
-
-def get_train_context_and_scaler(cfg: ExperimentConfig, device: torch.device) -> Tuple[torch.cuda.amp.autocast, torch.cuda.amp.GradScaler]:
-    dtype = torch.float32 if not cfg.train.use_fp16 else (torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16)
-    return torch.cuda.amp.autocast(enabled=(cfg.train.use_fp16 and device.type == "cuda"), dtype=dtype), torch.cuda.amp.GradScaler(enabled=cfg.train.use_fp16)
-    
+from nanomod.configuration import ExperimentConfig, set_config_store
 
 @hydra.main(config_path="config", config_name="config")
-def train(cfg: utils.ExperimentConfig) -> None:
+def train(cfg: ExperimentConfig) -> None:
     assert cfg.model.block_size == cfg.data.seq_len, f"Model block size {cfg.model.block_size} must match data sequence length {cfg.data.seq_len}"
 
     device = utils.get_best_device()
     model = GPT(cfg.model)
     model.to(device)
     model.train()
-    train_ctx, scaler = get_train_context_and_scaler(cfg, device)
+    train_ctx, scaler = utils.get_train_context_and_scaler(cfg, device)
     optimizer = model.configure_optimizers(cfg.train.weight_decay, cfg.train.lr, (cfg.train.beta1, cfg.train.beta2), device.type)
     train_loader, val_loader = get_dataloaders(cfg.data)
 
@@ -94,9 +84,15 @@ def train(cfg: utils.ExperimentConfig) -> None:
                     tokens_per_sec=avg_throughput,
                     lr=lr
                 )
-        if cfg.model.learnable_capacity_ratio:
-            utils.log_capacity_ratio_profile(model)
+
+        utils.log_model(
+            model, 
+            optimizer,
+            cfg.model,
+            tokens_seen=(tokens_per_step * num_steps), 
+            total_flops=(flops_per_forward * num_steps)
+        )
 
 if __name__ == "__main__":
-    utils.set_config_store()
+    set_config_store()
     train()
