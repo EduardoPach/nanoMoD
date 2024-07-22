@@ -8,6 +8,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 """
 
 import math
+import copy
 import inspect
 from dataclasses import dataclass
 
@@ -108,10 +109,9 @@ class Block(nn.Module):
 class MoDBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Ratio of tokens to be processed by the Block
         self.capacity_ratio = config.capacity_ratio
-        # Total number of tokens that can be processed by the Block
-        self.capacity = int(config.block_size * self.capacity_ratio)
+        self.capacity = int(self.capacity_ratio * config.block_size)
+
         # Router to decide which tokens to process
         self.router = nn.Linear(config.n_embd, 1, bias=False)
 
@@ -120,7 +120,15 @@ class MoDBlock(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
+    def normal_forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
     def forward(self, x):
+        if self.capacity_ratio == 1.0:
+            return self.normal_forward(x)
+
         batch_size, seq_len, emb_dim = x.shape
 
         # Calculate router logits and weights
@@ -145,6 +153,37 @@ class MoDBlock(nn.Module):
 
         return x, router_logits, selected_indices
 
+class DartsBlock(nn.Module):
+    """DARTS block to tune `capacity_ratio`"""
+    def __init__(self, config):
+        super().__init__()
+        ###### Helper for utils.get_compute_loss ######
+        self.hidden_size = config.n_embd
+        self.num_heads = config.n_head
+        self.seq_len = config.block_size
+        ###############################################
+
+        self.capacity_ratio_search_space = (0.1, 0.4, 0.7, 1.0)
+        init_value = 1 / len(self.capacity_ratio_search_space)
+        self.alphas = nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
+
+        blocks = []
+        for capacity_ratio in capacity_ratio_search_space:
+            _config = copy.deepcopy(config)
+            setattr(_config, 'capacity_ratio', capacity_ratio)
+            block = MoDBlock(config)
+            block.capacity_ratio = capacity_ratio
+            blocks.append(block)
+        
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x):
+        weights = F.softmax(self.alphas, dim=-1)
+        output = 0
+        for weight, block in zip(weights, self.blocks):
+            output += weight * block(x)
+        
+        return output
 
 @dataclass
 class GPTConfig:
@@ -158,6 +197,7 @@ class GPTConfig:
     capacity_ratio: float = 0.5
     use_mod: bool = True
     mod_freq: int = 2
+    use_darts: bool = False
 
 class GPT(nn.Module):
 
@@ -170,8 +210,10 @@ class GPT(nn.Module):
         # Should use MoDBlock every other layer starting from the second layer
         self.mod_idxs = None
         if config.use_mod:
-            self.mod_idxs = [i for i in range(config.n_layer) if i % config.mod_freq != 0]
+            self.mod_idxs = [i for i in range(config.n_layer) if ((i+1) % config.mod_freq) == 0]
             h_layers = nn.ModuleList([Block(config) if i not in self.mod_idxs else MoDBlock(config) for i in range(config.n_layer)])
+        elif config.use_darts:
+            h_layers = nn.ModuleList([DartsBlock(config) for _ in range(config.n_layer)])
         else:
             h_layers = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
 
@@ -335,7 +377,7 @@ class GPT(nn.Module):
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in self.named_parameters() if "alphas" not in pn}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.

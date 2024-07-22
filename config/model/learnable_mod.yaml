@@ -5,6 +5,5 @@ n_head: 6
 n_embd: 384
 dropout: 0.0
 bias: true
-use_mod: true
-capacity_ratio: 0.5
-mod_freq: 2
+use_mod: false
+use_darts: true

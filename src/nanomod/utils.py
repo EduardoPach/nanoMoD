@@ -6,8 +6,10 @@ from contextlib import nullcontext
 import torch
 import wandb
 import pandas as pd
+from hydra.core.config_store import ConfigStore
 
-from nanomod.model import GPTConfig
+from nanomod.model import GPTConfig, DartsBlock
+from nanomod.dataset import DataConfig
 
 def get_best_device() -> torch.device:
     if torch.cuda.is_available():
@@ -191,3 +193,76 @@ def log_table(**kwargs) -> None:
         return
     df = pd.DataFrame([kwargs])
     wandb.log({"table": wandb.Table(dataframe=df)})
+
+def log_capacity_ratio_profile(model: torch.nn.Module) -> None:
+    block_idxs = []
+    capacity_ratios = []
+    for block_idx, block in enumerate(model.transformer.h):
+        block_idxs.append(block_idx)
+        if not hasattr(block, "capacity_ratio"):
+            capacity_ratios.append(1)
+            continue
+        capacity_ratio = block.capacity_ratio
+        capacity_ratio = capacity_ratio.item() if torch.is_tensor(capacity_ratio) else capacity_ratio
+        capacity_ratios.append(capacity_ratio)
+    
+    df = pd.DataFrame({"Block Index": block_idxs, "Capacity Ratio": capacity_ratios})
+    wandb.log({"capacity_ratio_profile": wandb.Table(dataframe=df)})
+
+@dataclass
+class TrainConfig:
+    lr: float = field(default=6e-4) 
+    epochs: int = field(default=2)
+    log_interval: int = field(default=100)
+    eval_iterations: int = field(default=100)
+    use_wandb: bool = field(default=False)
+    use_fp16: bool = field(default=False)
+    weight_decay: float = field(default=1e-1)
+    beta1: float = field(default=0.9)
+    beta2: float = field(default=0.95)
+    warmup_iters: float = field(default=0.1)
+    decay_iter: float = field(default=0.9)
+    min_lr: float = field(default=6e-5)
+    grad_clip: float = field(default=1.0)
+
+@dataclass
+class ExperimentConfig:
+    model: GPTConfig = field(default_factory=GPTConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
+
+def set_config_store() -> None:
+    cs = ConfigStore.instance()
+    cs.store(name="config", node=ExperimentConfig)
+
+def get_compute_loss(model: torch.nn.Module):
+    """Compute the avg normalized FLOPs for the model to induce a loss on compute."""
+    attn_flops_per_layer = lambda hidden_size, seq_len, num_heads: (
+        (2 * 3 * seq_len * hidden_size * seq_len * num_heads) +
+        (2 * seq_len * seq_len * seq_len * num_heads) +
+        (3 * num_heads * seq_len * seq_len) +
+        (2 * seq_len * seq_len * seq_len * num_heads) +
+        (2 * seq_len * seq_len * num_heads * hidden_size)
+    )
+    ffn_flops_per_layer = lambda hidden_size, seq_len: 2 * seq_len * (8 * hidden_size * hidden_size)
+    block_flops = lambda hidden_size, seq_len, num_heads: (
+        attn_flops_per_layer(hidden_size, seq_len, num_heads) +
+        ffn_flops_per_layer(hidden_size, seq_len)
+    )
+
+    blocks = model.transformer.h
+    max_flops = block_flops(blocks[0].hidden_size, blocks[0].seq_len, blocks[0].num_heads)
+
+    loss = 0
+    for block in blocks:
+        weights = torch.nn.functional.softmax(block.alphas, dim=0)
+        if not isinstance(block, DartsBlock):
+            raise ValueError(f"Block {block} is not an instance of DartsBlock")
+        
+        for b, a in zip(block.blocks, weights):
+            normalized_flops = block_flops(block.hidden_size, b.capacity, block.num_heads) / max_flops
+            loss += normalized_flops * a
+    
+    loss = loss / len(blocks)
+        
+    return loss
