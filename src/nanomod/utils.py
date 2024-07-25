@@ -10,7 +10,6 @@ import wandb
 import pandas as pd
 from hydra.core.config_store import ConfigStore
 
-from nanomod.model import DartsBlock
 from nanomod.configuration import ExperimentConfig, GPTConfig
 
 def get_best_device() -> torch.device:
@@ -240,8 +239,8 @@ def log_capacity_ratio_profile(model: torch.nn.Module) -> None:
     df = pd.DataFrame({"Block Index": block_idxs, "Capacity Ratio": capacity_ratios})
     wandb.log({"capacity_ratio_profile": wandb.Table(dataframe=df)})
 
-def get_compute_loss(model: torch.nn.Module):
-    """Compute the avg normalized FLOPs for the model to induce a loss on compute."""
+
+def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_ratio: float) -> float:
     attn_flops_per_layer = lambda hidden_size, seq_len, num_heads: (
         (2 * 3 * seq_len * hidden_size * seq_len * num_heads) +
         (2 * seq_len * seq_len * seq_len * num_heads) +
@@ -249,25 +248,12 @@ def get_compute_loss(model: torch.nn.Module):
         (2 * seq_len * seq_len * seq_len * num_heads) +
         (2 * seq_len * seq_len * num_heads * hidden_size)
     )
+
     ffn_flops_per_layer = lambda hidden_size, seq_len: 2 * seq_len * (8 * hidden_size * hidden_size)
+
     block_flops = lambda hidden_size, seq_len, num_heads: (
         attn_flops_per_layer(hidden_size, seq_len, num_heads) +
         ffn_flops_per_layer(hidden_size, seq_len)
     )
 
-    blocks = model.transformer.h
-    max_flops = block_flops(blocks[0].hidden_size, blocks[0].seq_len, blocks[0].num_heads)
-
-    loss = 0
-    for block in blocks:
-        weights = torch.nn.functional.softmax(block.alphas, dim=0)
-        if not isinstance(block, DartsBlock):
-            raise ValueError(f"Block {block} is not an instance of DartsBlock")
-        
-        for b, a in zip(block.blocks, weights):
-            normalized_flops = block_flops(block.hidden_size, b.capacity, block.num_heads) / max_flops
-            loss += normalized_flops * a
-    
-    loss = loss / len(blocks)
-        
-    return loss
+    return block_flops(hidden_size, int(capacity_ratio * seq_len), num_heads)

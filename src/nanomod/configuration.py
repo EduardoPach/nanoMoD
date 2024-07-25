@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
 from hydra.core.config_store import ConfigStore
@@ -40,6 +40,13 @@ class TrainConfig:
     decay_iter: float = field(default=0.9)
     min_lr: float = field(default=6e-5)
     grad_clip: float = field(default=1.0)
+
+@dataclass
+class DnasConfig:
+    capacity_ratio_search_space: Tuple[float, ...] = field(default=(0.1, 0.4, 0.7, 1.0))
+    share_router_weights: bool = field(default=False)
+    train_router_steps: float = field(default=0.4)
+    gumbel_temperature: float = field(default=1.0)
 
 @dataclass
 class ExperimentConfig:

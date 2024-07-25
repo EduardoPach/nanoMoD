@@ -10,13 +10,15 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import copy
 import inspect
+from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from nanomod.configuration import GPTConfig
+from nanomod import utils
+from nanomod.configuration import GPTConfig, DnasConfig
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -155,38 +157,6 @@ class MoDBlock(nn.Module):
 
         return x, router_logits, selected_indices
 
-class DartsBlock(nn.Module):
-    """DARTS block to tune `capacity_ratio`"""
-    def __init__(self, config):
-        super().__init__()
-        ###### Helper for utils.get_compute_loss ######
-        self.hidden_size = config.n_embd
-        self.num_heads = config.n_head
-        self.seq_len = config.block_size
-        ###############################################
-
-        self.capacity_ratio_search_space = (0.1, 0.4, 0.7, 1.0)
-        init_value = 1 / len(self.capacity_ratio_search_space)
-        self.alphas = nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
-
-        blocks = []
-        for capacity_ratio in self.capacity_ratio_search_space:
-            _config = copy.deepcopy(config)
-            setattr(_config, 'capacity_ratio', capacity_ratio)
-            block = MoDBlock(config)
-            block.capacity_ratio = capacity_ratio
-            blocks.append(block)
-        
-        self.blocks = nn.ModuleList(blocks)
-
-    def forward(self, x):
-        weights = F.softmax(self.alphas, dim=-1)
-        output = 0
-        for weight, block in zip(weights, self.blocks):
-            output += weight * block(x)
-        
-        return output
-
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -200,8 +170,6 @@ class GPT(nn.Module):
         if config.use_mod:
             self.mod_idxs = [i for i in range(config.n_layer) if ((i+1) % config.mod_freq) == 0]
             h_layers = nn.ModuleList([Block(config) if i not in self.mod_idxs else MoDBlock(config) for i in range(config.n_layer)])
-        elif config.use_darts:
-            h_layers = nn.ModuleList([DartsBlock(config) for _ in range(config.n_layer)])
         else:
             h_layers = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
 
@@ -264,7 +232,9 @@ class GPT(nn.Module):
         all_selected_indices = ()
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
-            if self.config.use_mod and layer_idx in self.mod_idxs:
+            # Kinda hacky but if we're using DnasBlock we want to unpack regardless of `use_mod` and `mod_idxs`
+            if (self.config.use_mod and layer_idx in self.mod_idxs) or (self.is_dnas):
+                # If we are using DnasBlock router_logits and selected_indices are tuples
                 x, router_logits, selected_indices = x
                 all_router_logits += (router_logits,)
                 all_selected_indices += (selected_indices,)
@@ -274,7 +244,8 @@ class GPT(nn.Module):
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            if self.config.use_mod:
+            # If we are using DnasBlock we need to calculate the auxiliary loss
+            if self.config.use_mod or self.is_dnas:
                 aux_loss = self.compute_aux_loss(all_router_logits, all_selected_indices, t)
                 loss += aux_loss
         else:
@@ -285,14 +256,26 @@ class GPT(nn.Module):
 
         return logits, loss
     
+    @property
+    def is_dnas(self) -> bool:
+        return all(isinstance(block, DnasBlock) for block in self.transformer.h)
+    
     def compute_aux_loss(self, all_router_logits, all_selected_indices, seq_len):
         aux_loss = 0
+        # In Dnas all_router_logits is a tuple of tuples and the inner tuple is the router logits for each
+        # MoDBlock in the capacity ratio search space (<1.0). Same for selected_indices
+        normalizer = 1.0 if not self.is_dnas else len(all_router_logits[0])
         for router_logits, selected_indices in zip(all_router_logits, all_selected_indices):
-            # (batch_size, capacity) -> one-hot (batch_size, seq_len)
-            targets = F.one_hot(selected_indices, num_classes=seq_len).sum(dim=1).to(router_logits.dtype)
-            aux_loss += F.binary_cross_entropy_with_logits(router_logits, targets)
-
-        return aux_loss
+            if not self.is_dnas:
+                # (batch_size, capacity) -> one-hot (batch_size, seq_len)
+                targets = F.one_hot(selected_indices, num_classes=seq_len).sum(dim=1).to(router_logits.dtype)
+                aux_loss += F.binary_cross_entropy_with_logits(router_logits, targets)
+            else:
+                for layer_router_logits, layer_selected_indices in zip(router_logits, selected_indices):
+                    targets = F.one_hot(layer_selected_indices, num_classes=seq_len).sum(dim=1).to(layer_router_logits.dtype)
+                    aux_loss += F.binary_cross_entropy_with_logits(layer_router_logits, targets)
+        
+        return aux_loss / normalizer
 
 
     def crop_block_size(self, block_size):
@@ -431,3 +414,116 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+    
+
+def gumbel_softmax(alphas: torch.Tensor, temperature: float, eps=1e-10) -> torch.Tensor:
+    """Gumbel-Softmax sampling as in the paper https://arxiv.org/abs/1611.01144"""
+    U = torch.rand_like(alphas)
+    gumbel = -torch.log(-torch.log(U + eps) + eps) # sample from gumbel(0,1)
+    y = alphas + gumbel
+    return F.softmax(y / temperature, dim=-1)
+
+class DnasBlock(nn.Module):
+    """DARTS block to tune `capacity_ratio`"""
+    def __init__(self, config: DnasConfig, model_config: GPTConfig, model: Optional[nn.Module] = None) -> None:
+        super().__init__()
+        self.capacity_ratio_search_space = config.capacity_ratio_search_space
+        self.alphas = self._init_alphas()        
+        self.blocks = self._build_blocks(config, model_config, model)
+
+    def _build_blocks(self, config: DnasConfig, model_config: GPTConfig, model: nn.Module) -> List[nn.ModuleList]:
+        blocks = []
+        if model is not None:
+            state_dict = model.state_dict()
+        for capacity_ratio in self.capacity_ratio_search_space:
+            _config = copy.deepcopy(model_config)
+            setattr(_config, 'capacity_ratio', capacity_ratio)
+            block = MoDBlock(config) if capacity_ratio < 1.0 else Block(config)
+            if model is not None:
+                # If a base model is provided, load its state_dict to all blocks
+                block.load_state_dict(state_dict)
+            block.capacity_ratio = capacity_ratio
+            blocks.append(block)
+        
+        if config.share_router_weights:
+            shared_router = blocks[0].router
+            for block in blocks:
+                if isinstance(block, MoDBlock):
+                    block.router = shared_router
+        
+        return nn.ModuleList(blocks)
+
+    def _init_alphas(self) -> torch.Tensor:
+        init_value = 1 / len(self.capacity_ratio_search_space)
+        return nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
+
+    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # TODO: Maybe allow temperature scheduling
+        weights = gumbel_softmax(self.alphas, temperature=self.temperature)
+        output = 0
+        block_router_logits = ()
+        block_selected_indices = ()
+        for weight, block in zip(weights, self.blocks):
+            if isinstance(block, MoDBlock):
+                hidden_state, router_logits, selected_indices = block(x)
+
+                output += weight * hidden_state
+                block_router_logits += (router_logits,)
+                block_selected_indices += (selected_indices,)
+            else:
+                output += weight * block(x)
+
+        return output, block_router_logits, block_selected_indices
+    
+class DnasSearchModel(nn.Module):
+    def __init__(self, model: nn.Module, config: DnasConfig):
+        super().__init__()
+        self.config = config
+        self.model_config = model.config
+
+        self.model = self.prepare_model(model)
+        self.register_buffer("compute_tensor", self._init_compute_tensor(), persistent=False)
+
+
+    def prepare_model(self, model: nn.Module) -> nn.Module:
+        blocks = model.transformer.h
+        dnas_blocks = []
+        for block in blocks:
+            dnas_block = DnasBlock(self.config, model=block)
+            dnas_blocks.append(dnas_block)
+        
+        model.transformer.h = nn.ModuleList(dnas_blocks)
+
+        return model
+
+    def _init_compute_tensor(self) -> torch.Tensor:
+        compute = []
+        for capacity_ratio in self.config.capacity_ratio_search_space:
+            compute_value = utils.get_flop_per_block(
+                hidden_size=self.model_config.n_embd,
+                seq_len=self.model_config.block_size,
+                num_heads=self.model_config.n_head,
+                capacity_ratio=capacity_ratio
+            )
+            compute.append(compute_value)
+        
+        return torch.tensor(compute, dtype=torch.float32)
+
+    def get_blocks(self) -> List[DnasBlock]:
+        return self.model.transformer.h
+    
+    def compute_loss(self) -> torch.Tensor:
+        loss = 0
+        capacity_ratios = self.config.capacity_ratio_search_space
+        for block in self.get_blocks():
+            alphas = block.alphas
+            weights = gumbel_softmax(alphas, temperature=self.config.gumbel_temperature)
+            loss += torch.sum(weights * self.compute_tensor)
+        
+        return torch.log(loss)
+    
+    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, loss_model = self.model(x)
+        loss_compute = self.compute_loss()
+
+        return logits, loss_model, loss_compute
