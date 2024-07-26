@@ -51,12 +51,12 @@ class TrainDnasConfig(TrainConfig):
     lr_alphas: float = field(default=6e-4)
     grad_clip_model: float = field(default=1.0)
     grad_clip_alphas: float = field(default=1.0)
+    train_router_steps: float = field(default=0.4)
 
 @dataclass
 class DnasConfig:
     capacity_ratio_search_space: Tuple[float, ...] = field(default=(0.1, 0.4, 0.7, 1.0))
     share_router_weights: bool = field(default=False)
-    train_router_steps: float = field(default=0.4)
     gumbel_temperature: float = field(default=1.0)
     a: float = field(default=0.2)
     b: float = field(default=0.6)
