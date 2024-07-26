@@ -7,7 +7,7 @@ from nanomod.model import GPT
 from nanomod.dataset import get_dataloaders
 from nanomod.configuration import TrainExperimentConfig, set_config_store
 
-@hydra.main(config_path="config", config_name="config")
+@hydra.main(config_path="config", config_name="config_train")
 def train(cfg: TrainExperimentConfig) -> None:
     assert cfg.model.block_size == cfg.data.seq_len, f"Model block size {cfg.model.block_size} must match data sequence length {cfg.data.seq_len}"
 
