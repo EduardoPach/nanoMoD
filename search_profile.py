@@ -71,7 +71,7 @@ def train_alphas_step(
 
     return loss.item(), loss_compute.item()
 
-@hydra.main(config_path="config", config_name="config")
+@hydra.main(config_path="config", config_name="config_search")
 def main(cfg: SearchExperimentConfig) -> None:
     device = utils.get_best_device()
     wandb_mode = "online" if cfg.train.use_wandb else "disabled"
