@@ -4,7 +4,7 @@ defaults:
   
 data:
   seq_len: 256
-  num_tokens: 50000
+  num_tokens: 5000000
   batch_size: 64
   num_workers: 4
   pin_memory: true
@@ -14,8 +14,8 @@ train:
   eval_iterations: 100
   use_wandb: true
   use_fp16: true
-  grad_clip_model: none
-  gra_clip_alphas: none
+  grad_clip_model: null
+  grad_clip_alphas: null
   watch_model: true
   train_router_steps: 0.5
 dnas:
