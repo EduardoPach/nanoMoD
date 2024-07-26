@@ -145,5 +145,5 @@ def main(cfg: SearchExperimentConfig) -> None:
         )
 
 if __name__ == "__main__":
-    set_config_store(SearchExperimentConfig)
+    set_config_store()
     main()

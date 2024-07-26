@@ -428,6 +428,7 @@ class DnasBlock(nn.Module):
     def __init__(self, config: DnasConfig, model_config: GPTConfig, model: Optional[nn.Module] = None) -> None:
         super().__init__()
         self.capacity_ratio_search_space = config.capacity_ratio_search_space
+        self.temperature = config.gumbel_temperature
         self.alphas = self._init_alphas()        
         self.blocks = self._build_blocks(config, model_config, model)
 
@@ -523,8 +524,8 @@ class DnasSearchModel(nn.Module):
     def get_router_weights(self) -> List[torch.Tensor]:
         return [param for name, param in self.model.named_parameters() if "router" in name]
     
-    @torch.no_grad()
     @property
+    @torch.no_grad()
     def capacity_profile(self) -> Dict[str, float]:
         profile = {}
         for idx, block in enumerate(self.get_blocks()):
