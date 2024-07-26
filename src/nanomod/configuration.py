@@ -49,11 +49,11 @@ class TrainNormalConfig(TrainConfig):
 
 @dataclass
 class TrainDnasConfig(TrainConfig):
+    train_router_steps: float = field(default=0.4)
     lr_model: float = field(default=6e-4)
     lr_alphas: float = field(default=6e-4)
-    grad_clip_model: float = field(default=1.0)
-    grad_clip_alphas: float = field(default=1.0)
-    train_router_steps: float = field(default=0.4)
+    grad_clip_model: Optional[float] = field(default=1.0)
+    grad_clip_alphas: Optional[float] = field(default=1.0)
 
 @dataclass
 class DnasConfig:

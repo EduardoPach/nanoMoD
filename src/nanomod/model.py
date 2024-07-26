@@ -490,7 +490,7 @@ class DnasSearchModel(nn.Module):
         blocks = model.transformer.h
         dnas_blocks = []
         for block in blocks:
-            dnas_block = DnasBlock(self.config, model_config=self.model_config ,model=block)
+            dnas_block = DnasBlock(self.config, model_config=self.model_config, model=block)
             dnas_blocks.append(dnas_block)
         
         model.transformer.h = nn.ModuleList(dnas_blocks)
@@ -515,7 +515,7 @@ class DnasSearchModel(nn.Module):
     
     def freeze(self) -> None:
         for name, param in self.model.named_parameters():
-            if ("alphas" not in name) or ("router" not in name):
+            if ("alphas" not in name) and ("router" not in name):
                 param.requires_grad = False
 
     def get_alphas(self) -> List[torch.Tensor]:

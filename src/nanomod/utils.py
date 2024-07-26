@@ -241,3 +241,9 @@ def load_checkpoint(checkpoint: str = "model-ckpt:latest") -> Tuple[Dict[str, to
     state_dict = checkpoint['model']
 
     return state_dict, config
+
+def log_table(**kwargs) -> None:
+    if kwargs is None:
+        return
+    df = pd.DataFrame([kwargs])
+    wandb.log({"table": wandb.Table(dataframe=df)})
