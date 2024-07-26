@@ -215,13 +215,6 @@ def train_step(
 
     return latency, throughput, loss.item()
 
-def log_table(**kwargs) -> None:
-    if kwargs is None:
-        return
-    df = pd.DataFrame([kwargs])
-    wandb.log({"table": wandb.Table(dataframe=df)})
-
-
 def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_ratio: float) -> float:
     attn_flops_per_layer = lambda hidden_size, seq_len, num_heads: (
         (2 * 3 * seq_len * hidden_size * seq_len * num_heads) +

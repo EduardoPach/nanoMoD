@@ -33,6 +33,8 @@ class TrainConfig:
     eval_iterations: int = field(default=100)
     use_wandb: bool = field(default=False)
     use_fp16: bool = field(default=False)
+    watch_model: bool = field(default=False)
+    watch_mode: str = field(default="all")
 
 @dataclass
 class TrainNormalConfig(TrainConfig):
@@ -87,6 +89,7 @@ if __name__ == "__main__":
     @hydra.main(config_path="../../config", config_name="config_search")
     def main_test(cfg: SearchExperimentConfig) -> None:
         print(cfg.train)
+        print(cfg.dnas)
 
     set_config_store()
     main_test()

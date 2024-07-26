@@ -49,7 +49,7 @@ def train_alphas_step(
     ctx: torch.cuda.amp.autocast | nullcontext,
     scaler: torch.cuda.amp.GradScaler,
     grad_clip: Optional[float] = None,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float]:
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
@@ -69,7 +69,7 @@ def train_alphas_step(
     scaler.step(optimizer)
     scaler.update()
 
-    return loss.item(), loss_compute.item()
+    return total_loss.item(), loss.item(), loss_compute.item()
 
 @hydra.main(config_path="config", config_name="config_search")
 def main(cfg: SearchExperimentConfig) -> None:
@@ -91,8 +91,12 @@ def main(cfg: SearchExperimentConfig) -> None:
         base_model = GPT(model_config)
         base_model.load_state_dict(state_dict)
         model = DnasSearchModel(base_model, cfg.dnas)
+        model.freeze()
         model.to(device)
         model.train()
+
+        if cfg.train.watch_model:
+            wandb.watch(model, log=cfg.train.watch_mode, log_freq=cfg.train.log_interval)
 
         optimizer_router = AdamW(model.get_router_weights(), lr=cfg.train.lr_model)
         optimizer_alphas = AdamW(model.get_alphas(), lr=cfg.train.lr_alphas)
@@ -108,7 +112,7 @@ def main(cfg: SearchExperimentConfig) -> None:
                 )
                 pbar.set_description(f"Searching Model: Step {step} - Training Model Weights - Loss: {loss:.4f}")
             else:
-                loss, loss_compute = train_alphas_step(
+                total_loss, loss, loss_compute = train_alphas_step(
                     model=model,
                     a=cfg.dnas.a,
                     b=cfg.dnas.b,
