@@ -441,7 +441,7 @@ class DnasBlock(nn.Module):
             block = MoDBlock(config) if capacity_ratio < 1.0 else Block(config)
             if model is not None:
                 # If a base model is provided, load its state_dict to all blocks
-                block.load_state_dict(state_dict)
+                block.load_state_dict(state_dict, strict=False)
             block.capacity_ratio = capacity_ratio
             blocks.append(block)
         
@@ -489,7 +489,7 @@ class DnasSearchModel(nn.Module):
         blocks = model.transformer.h
         dnas_blocks = []
         for block in blocks:
-            dnas_block = DnasBlock(self.config, model=block)
+            dnas_block = DnasBlock(self.config, model_config=self.model_config ,model=block)
             dnas_blocks.append(dnas_block)
         
         model.transformer.h = nn.ModuleList(dnas_blocks)
@@ -512,6 +512,27 @@ class DnasSearchModel(nn.Module):
     def get_blocks(self) -> List[DnasBlock]:
         return self.model.transformer.h
     
+    def freeze(self) -> None:
+        for name, param in self.model.named_parameters():
+            if ("alphas" not in name) or ("router" not in name):
+                param.requires_grad = False
+
+    def get_alphas(self) -> List[torch.Tensor]:
+        return [param for name, param in self.model.named_parameters() if "alphas" in name]
+    
+    def get_router_weights(self) -> List[torch.Tensor]:
+        return [param for name, param in self.model.named_parameters() if "router" in name]
+    
+    @torch.no_grad()
+    @property
+    def capacity_profile(self) -> Dict[str, float]:
+        profile = {}
+        for idx, block in enumerate(self.get_blocks()):
+            selected_indice = block.alphas.argmax().item()
+            profile[f"layer_{idx}"] = self.config.capacity_ratio_search_space[selected_indice]
+        
+        return profile
+    
     def compute_loss(self) -> torch.Tensor:
         loss = 0
         capacity_ratios = self.config.capacity_ratio_search_space
@@ -522,8 +543,16 @@ class DnasSearchModel(nn.Module):
         
         return torch.log(loss)
     
-    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits, loss_model = self.model(x)
-        loss_compute = self.compute_loss()
+    def forward(
+        self, 
+        x: torch.LongTensor, 
+        target: Optional[torch.LongTensor] = None, 
+        return_loss_compute: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, loss_model = self.model(x, target)
 
-        return logits, loss_model, loss_compute
+        if return_loss_compute:
+            loss_compute = self.compute_loss()
+            return logits, loss_model, loss_compute
+        
+        return logits, loss_model

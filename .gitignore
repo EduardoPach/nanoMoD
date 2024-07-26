@@ -5,6 +5,7 @@ __pycache__/
 .pdm-python
 wandb
 checkpoint_dir
+artifacts
 out
 # C extensions
 *.so

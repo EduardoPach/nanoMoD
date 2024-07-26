@@ -8,9 +8,9 @@ from contextlib import nullcontext
 import torch
 import wandb
 import pandas as pd
-from hydra.core.config_store import ConfigStore
 
-from nanomod.configuration import ExperimentConfig, GPTConfig
+from nanomod.model import GPT
+from nanomod.configuration import TrainExperimentConfig, GPTConfig
 
 def get_best_device() -> torch.device:
     if torch.cuda.is_available():
@@ -77,25 +77,6 @@ def total_flops(cfg: GPTConfig) -> int:
 
     return total_flops
 
-@torch.no_grad()
-def estimate_loss(
-    model: torch.nn.Module, 
-    dataloader: torch.utils.data.DataLoader, 
-    eval_iterations: int, ctx: torch.cuda.amp.autocast | nullcontext
-) -> float:
-    device = next(model.parameters()).device
-    model.eval()
-    total_loss = 0
-    for i, (inputs, targets) in enumerate(dataloader):
-        if i >= eval_iterations:
-            break
-        inputs, targets = inputs.to(device), targets.to(device)
-        with ctx:
-            _, loss = model(inputs, targets)
-        total_loss += loss.item()
-    return total_loss / eval_iterations
-
-
 def log_model(
     model: torch.nn.Module, 
     optimizer: torch.optim.Optimizer,
@@ -118,6 +99,24 @@ def log_model(
     artifact.add_file(ckpt_path)
     wandb.run.log_artifact(artifact)
 
+@torch.no_grad()
+def estimate_loss(
+    model: torch.nn.Module, 
+    dataloader: torch.utils.data.DataLoader, 
+    eval_iterations: int, 
+    ctx: torch.cuda.amp.autocast | nullcontext
+) -> float:
+    device = next(model.parameters()).device
+    model.eval()
+    total_loss = 0
+    for i, (inputs, targets) in enumerate(dataloader):
+        if i >= eval_iterations:
+            break
+        inputs, targets = inputs.to(device), targets.to(device)
+        with ctx:
+            _, loss = model(inputs, targets)
+        total_loss += loss.item()
+    return total_loss / eval_iterations
 
 def log_metrics(
     model: torch.nn.Module,
@@ -167,7 +166,7 @@ def set_learning_rate(
     return new_lr
 
 def get_train_context_and_scaler(
-    cfg: ExperimentConfig, 
+    cfg: TrainExperimentConfig, 
     device: torch.device
 ) -> Tuple[torch.cuda.amp.autocast, torch.cuda.amp.GradScaler]:
     dtype = torch.float32 if not cfg.train.use_fp16 else (torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16)
@@ -224,21 +223,6 @@ def log_table(**kwargs) -> None:
     df = pd.DataFrame([kwargs])
     wandb.log({"table": wandb.Table(dataframe=df)})
 
-def log_capacity_ratio_profile(model: torch.nn.Module) -> None:
-    block_idxs = []
-    capacity_ratios = []
-    for block_idx, block in enumerate(model.transformer.h):
-        block_idxs.append(block_idx)
-        if not hasattr(block, "capacity_ratio"):
-            capacity_ratios.append(1)
-            continue
-        capacity_ratio = block.capacity_ratio
-        capacity_ratio = capacity_ratio.item() if torch.is_tensor(capacity_ratio) else capacity_ratio
-        capacity_ratios.append(capacity_ratio)
-    
-    df = pd.DataFrame({"Block Index": block_idxs, "Capacity Ratio": capacity_ratios})
-    wandb.log({"capacity_ratio_profile": wandb.Table(dataframe=df)})
-
 
 def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_ratio: float) -> float:
     attn_flops_per_layer = lambda hidden_size, seq_len, num_heads: (
@@ -257,3 +241,13 @@ def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_
     )
 
     return block_flops(hidden_size, int(capacity_ratio * seq_len), num_heads)
+
+def load_checkpoint(checkpoint: str = "model-ckpt:latest") -> torch.nn.Module:
+    artifact = wandb.use_artifact(f'eduardopacheco/nanoMoD/{checkpoint}', type='model')
+    artifact_dir = artifact.download()
+    checkpoint = torch.load(os.path.join(artifact_dir, "ckpt.pt"), map_location="cpu")
+    config = GPTConfig(**checkpoint['model_config'])
+    model = GPT(config)
+    model.load_state_dict(checkpoint['model'])
+
+    return model

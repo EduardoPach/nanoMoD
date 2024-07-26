@@ -49,11 +49,19 @@ class DnasConfig:
     gumbel_temperature: float = field(default=1.0)
 
 @dataclass
-class ExperimentConfig:
+class TrainExperimentConfig:
     model: GPTConfig = field(default_factory=GPTConfig)
     data: DataConfig = field(default_factory=DataConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
 
-def set_config_store() -> None:
+@dataclass
+class SearchExperimentConfig:
+    model: GPTConfig = field(default_factory=GPTConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
+    dnas: DnasConfig = field(default_factory=DnasConfig)
+
+
+def set_config_store(node: TrainExperimentConfig | SearchExperimentConfig) -> None:
     cs = ConfigStore.instance()
-    cs.store(name="config", node=ExperimentConfig)
+    cs.store(name="config", node=node)
