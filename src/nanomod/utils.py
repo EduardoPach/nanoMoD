@@ -1,15 +1,13 @@
 import os
 import time
 import math
-from dataclasses import asdict
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 from contextlib import nullcontext
 
 import torch
 import wandb
 import pandas as pd
 
-from nanomod.model import GPT
 from nanomod.configuration import TrainExperimentConfig, GPTConfig
 
 def get_best_device() -> torch.device:
@@ -87,7 +85,7 @@ def log_model(
     checkpoint = {
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
-        'model_config': asdict(model_config),
+        'model_config': dict(model_config),
     }
 
     if not os.path.exists(output_dir):
@@ -242,12 +240,11 @@ def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_
 
     return block_flops(hidden_size, int(capacity_ratio * seq_len), num_heads)
 
-def load_checkpoint(checkpoint: str = "model-ckpt:latest") -> torch.nn.Module:
+def load_checkpoint(checkpoint: str = "model-ckpt:latest") -> Tuple[Dict[str, torch.Tensor], GPTConfig]:
     artifact = wandb.use_artifact(f'eduardopacheco/nanoMoD/{checkpoint}', type='model')
     artifact_dir = artifact.download()
     checkpoint = torch.load(os.path.join(artifact_dir, "ckpt.pt"), map_location="cpu")
     config = GPTConfig(**checkpoint['model_config'])
-    model = GPT(config)
-    model.load_state_dict(checkpoint['model'])
+    state_dict = checkpoint['model']
 
-    return model
+    return state_dict, config

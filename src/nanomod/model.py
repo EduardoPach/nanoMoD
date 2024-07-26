@@ -438,7 +438,7 @@ class DnasBlock(nn.Module):
         for capacity_ratio in self.capacity_ratio_search_space:
             _config = copy.deepcopy(model_config)
             setattr(_config, 'capacity_ratio', capacity_ratio)
-            block = MoDBlock(config) if capacity_ratio < 1.0 else Block(config)
+            block = MoDBlock(_config) if capacity_ratio < 1.0 else Block(_config)
             if model is not None:
                 # If a base model is provided, load its state_dict to all blocks
                 block.load_state_dict(state_dict, strict=False)

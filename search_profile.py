@@ -8,7 +8,7 @@ from tqdm import tqdm
 from torch.optim import AdamW
 
 from nanomod import utils
-from nanomod.model import DnasSearchModel
+from nanomod.model import DnasSearchModel, GPT
 from nanomod.dataset import get_dataloaders
 from nanomod.configuration import SearchExperimentConfig, set_config_store
 
@@ -87,8 +87,10 @@ def main(cfg: SearchExperimentConfig) -> None:
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"Searching Model: Step 0 - Training Model Weights", unit="step")
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="search", mode=wandb_mode):
-        base_model = utils.load_checkpoint()
-        model = DnasSearchModel(cfg.model, base_model)
+        state_dict, model_config = utils.load_checkpoint()
+        base_model = GPT(model_config)
+        base_model.load_state_dict(state_dict)
+        model = DnasSearchModel(base_model, cfg.dnas)
         model.to(device)
         model.train()
 
