@@ -506,7 +506,7 @@ class DnasSearchModel(nn.Module):
                 num_heads=self.model_config.n_head,
                 capacity_ratio=capacity_ratio
             )
-            compute.append(compute_value)
+            compute.append(compute_value * 1e-6) # Convert to MFLOPs
         
         return torch.tensor(compute, dtype=torch.float32)
 

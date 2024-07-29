@@ -163,6 +163,24 @@ def set_learning_rate(
 
     return new_lr
 
+class LearningRateScheduler:
+    def __init__(self, optimizer: torch.optim.Optimizer, warmup_iters: int, lr_decay_iters: int, max_learning_rate: float, min_lr: float) -> None:
+        self.optimizer = optimizer
+        self.warmup_iters = warmup_iters
+        self.lr_decay_iters = lr_decay_iters
+        self.max_learning_rate = max_learning_rate
+        self.min_lr = min_lr
+    
+    def update(self, step: int) -> float:
+        return set_learning_rate(
+            self.optimizer, 
+            step, 
+            self.warmup_iters, 
+            self.lr_decay_iters, 
+            self.max_learning_rate, 
+            self.min_lr
+        )
+
 def get_train_context_and_scaler(
     cfg: TrainExperimentConfig, 
     device: torch.device

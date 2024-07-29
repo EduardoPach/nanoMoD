@@ -8,6 +8,7 @@ data:
   batch_size: 64
   num_workers: 4
   pin_memory: true
+  seed: 42
 train:
   epochs: 3
   log_interval: 50

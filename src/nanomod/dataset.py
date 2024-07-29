@@ -34,8 +34,8 @@ class OpenWebText(torch.utils.data.Dataset):
         return torch.from_numpy(x.astype(np.int64)), torch.from_numpy(y.astype(np.int64))
 
 def get_dataloaders(cfg: DataConfig) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    train_dataset = OpenWebText("train", cfg.seq_len, cfg.num_tokens)
-    val_dataset = OpenWebText("val", cfg.seq_len, cfg.num_tokens)
+    train_dataset = OpenWebText("train", cfg.seq_len, cfg.num_tokens, cfg.seed)
+    val_dataset = OpenWebText("val", cfg.seq_len, cfg.num_tokens, cfg.seed)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
         batch_size=cfg.batch_size, 

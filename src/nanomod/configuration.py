@@ -11,6 +11,7 @@ class DataConfig:
     batch_size: int = field(default=64)
     num_workers: int = field(default=4)
     pin_memory: bool = field(default=True)
+    seed: int = field(default=13)
 
 @dataclass
 class GPTConfig:
