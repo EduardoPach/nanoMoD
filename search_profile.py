@@ -1,9 +1,11 @@
 from typing import Tuple, Optional
 from contextlib import nullcontext
+from collections import defaultdict
 
 import hydra
 import wandb
 import torch
+import pandas as pd
 from tqdm import tqdm
 from torch.optim import AdamW
 
@@ -81,9 +83,11 @@ def main(cfg: SearchExperimentConfig) -> None:
     train_loader, val_loader = get_dataloaders(cfg.data)
 
     num_steps = len(train_loader) * cfg.train.epochs
-    num_steps_model = int(num_steps * cfg.train.train_router_steps)
-    tokens_per_step = cfg.data.batch_size * cfg.data.seq_len
+    num_steps_model_only = int(num_steps * cfg.train.train_router_steps)
+    num_steps_alphas = num_steps - num_steps_model_only
 
+    tokens_per_step = cfg.data.batch_size * cfg.data.seq_len
+    alphas_historical = defaultdict(list)
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"Searching Model: Step 0 - Training Model Weights", unit="step")
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="search", mode=wandb_mode):
@@ -100,18 +104,43 @@ def main(cfg: SearchExperimentConfig) -> None:
 
         optimizer_router = AdamW(model.get_router_weights(), lr=cfg.train.lr_model)
         optimizer_alphas = AdamW(model.get_alphas(), lr=cfg.train.lr_alphas)
+
+        scheduler_router = utils.LearningRateScheduler(
+            optimizer=optimizer_router, 
+            warmup_iters=int(num_steps_model_only * 0.2), 
+            lr_decay_iters=int(num_steps_model_only + num_steps_alphas * 0.5), 
+            max_learning_rate=cfg.train.lr_model, 
+            min_lr=cfg.train.lr_model / 10, 
+        )
+
+        scheduler_alphas = utils.LearningRateScheduler(
+            optimizer=optimizer_alphas, 
+            warmup_iters=int(num_steps_alphas * 0.1), 
+            lr_decay_iters=int(num_steps_alphas * 0.9),
+            max_learning_rate=cfg.train.lr_alphas, 
+            min_lr=cfg.train.lr_alphas / 10
+        )
+
+        alphas_values = []
         for step in pbar:
-            if step < num_steps_model:
-                loss = train_model_step(
-                    model=model, 
-                    optimizer=optimizer_router, 
-                    train_loader=train_loader,
-                    ctx=ctx,
-                    scaler=scaler_model,
-                    grad_clip=cfg.train.grad_clip_model
-                )
-                pbar.set_description(f"Searching Model: Step {step} - Training Model Weights - Loss: {loss:.4f}")
-            else:
+            optimizer_alphas.zero_grad(set_to_none=True)
+            optimizer_router.zero_grad(set_to_none=True)
+
+            lr_model = scheduler_router.update(step+1)
+
+            loss_model_step = train_model_step(
+                model=model, 
+                optimizer=optimizer_router, 
+                train_loader=train_loader,
+                ctx=ctx,
+                scaler=scaler_model,
+                grad_clip=cfg.train.grad_clip_model
+            )
+    
+        
+            if step > (num_steps_model_only - 1):
+                lr_alphas = scheduler_alphas.update(step - num_steps_model_only + 1)
+
                 total_loss, loss, loss_compute = train_alphas_step(
                     model=model,
                     a=cfg.dnas.a,
@@ -122,31 +151,41 @@ def main(cfg: SearchExperimentConfig) -> None:
                     scaler=scaler_alphas,
                     grad_clip=cfg.train.grad_clip_alphas
                 )
-                pbar.set_description(f"Searching Model: Step {step} - Training Alphas - Loss: {loss:.4f} - Loss Compute: {loss_compute:.4f}")
+                pbar.set_description(f"Searching Model: Step {step} - Training Alphas - Loss: {loss:.4f} - Loss Compute: {loss_compute:.4f} - Total Loss: {total_loss:.4f}")
+                wandb.log({
+                    "search/loss_model_step": loss_model_step, 
+                    "search/total_loss": total_loss, 
+                    "search/loss_ce": loss, 
+                    "search/loss_compute": loss_compute, 
+                    "search/step": step,
+                    "search/lr_alphas": lr_alphas,
+                    "search/lr_model": lr_model
+                })
+            
+            else:
+                wandb.log({"search/loss_model": loss, "search/step": step, "search/lr_model": lr_model})
+                pbar.set_description(f"Searching Model: Step {step} - Training Model Weights - Loss: {loss:.4f}")
+
 
             if step % cfg.train.log_interval == 0:
-                utils.log_metrics(
-                    model=model,
-                    ctx=ctx,
-                    train_loader=train_loader,
-                    val_loader=val_loader,
-                    eval_iterations=cfg.train.eval_iterations,
-                    step=step,
-                    tokens_seen=(tokens_per_step * (step + 1)),
-                    **model.capacity_profile
-                )
+                for block_idx, block in enumerate(model.get_blocks()):
+                    alphas_values = block.alphas.detach().cpu()
+
+                    weight_values = alphas_values.softmax(dim=-1).tolist()
+                    alphas_values = alphas_values.tolist()
+                    capacity_ratios = cfg.dnas.capacity_ratio_search_space
+                    idx = [block_idx] * len(capacity_ratios)
+                    step_list = [step] * len(capacity_ratios)
+
+                    alphas_historical["block_idx"].extend(idx)
+                    alphas_historical["capacity_ratio"].extend(capacity_ratios)
+                    alphas_historical["alphas"].extend(alphas_values)
+                    alphas_historical["weights"].extend(weight_values)
+                    alphas_historical["step"].extend(step_list)
 
         # Log one more time at the end
-        utils.log_metrics(
-            model=model,
-            ctx=ctx,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            eval_iterations=cfg.train.eval_iterations,
-            step=step,
-            tokens_seen=(tokens_per_step * (step + 1)),
-            **model.capacity_profile
-        )
+        table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
+        wandb.log({"search/alphas_historical": table})
 
 if __name__ == "__main__":
     set_config_store()
