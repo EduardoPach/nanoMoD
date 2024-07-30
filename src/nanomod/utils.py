@@ -181,6 +181,37 @@ class LearningRateScheduler:
             self.min_lr
         )
 
+class TemperatureExponentialDecay:
+    def __init__(self, max_temperature: float, min_temperature: float, max_steps: int) -> None:
+        if max_steps <= 0:
+            raise ValueError("max_steps must be a positive integer")
+        if max_value <= min_value:
+            raise ValueError("max_value must be greater than min_value")
+        
+        self.max_temperature = max_temperature
+        self.min_temperature = min_temperature
+        self.max_steps = max_steps
+        
+        # Calculate the decay factor
+        self.decay_factor = (min_temperature / max_temperature) ** (1 / (max_steps - 1))
+    
+    def update(self, step: int) -> float:
+        """
+        Get the temperature for a given step.
+        
+        Parameters:
+            step (int): The step for which to get the temperature.
+        
+        Returns:
+            float: The temperature at the given step.
+        """
+        if step < 0 or step >= self.max_steps:
+            raise ValueError("step must be within the range [0, max_steps)")
+        
+        temperature = self.max_temperature * (self.decay_factor ** step)
+        return temperature
+
+
 def get_train_context_and_scaler(
     cfg: TrainExperimentConfig, 
     device: torch.device

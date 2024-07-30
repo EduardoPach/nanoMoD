@@ -506,9 +506,22 @@ class DnasSearchModel(nn.Module):
                 num_heads=self.model_config.n_head,
                 capacity_ratio=capacity_ratio
             )
-            compute.append(compute_value * 1e-6) # Convert to MFLOPs
+            compute.append(compute_value) # Convert to MFLOPs
         
-        return torch.tensor(compute, dtype=torch.float32)
+        compute_tensor = torch.tensor(compute, dtype=torch.float32)
+
+        if self.config.compute_mode == "mflop":
+            return compute_tensor * 1e-6
+        elif self.config.compute_mode == "log":
+            return torch.log(compute_tensor)
+        elif self.config.compute_mode == "sqrt":
+            return torch.sqrt(compute_tensor)
+        elif self.config.compute_mode == "normalized":
+            return compute_tensor / compute_tensor.max()
+        elif self.config.compute_mode == "none":
+            return compute_tensor
+        else:
+            raise ValueError(f"Invalid compute mode: {self.config.compute_mode}")
 
     def get_blocks(self) -> List[DnasBlock]:
         return self.model.transformer.h
@@ -543,6 +556,10 @@ class DnasSearchModel(nn.Module):
             loss += torch.sum(weights * self.compute_tensor)
         
         return torch.log(loss)
+
+    def set_temperature(self, temperature: float) -> None:
+        for block in self.get_blocks():
+            block.temperature = temperature
     
     def forward(
         self, 

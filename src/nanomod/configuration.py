@@ -52,7 +52,7 @@ class TrainNormalConfig(TrainConfig):
 class TrainDnasConfig(TrainConfig):
     train_router_steps: float = field(default=0.4)
     lr_model: float = field(default=6e-4)
-    lr_alphas: float = field(default=6e-4)
+    lr_alphas: float = field(default=6e-3)
     grad_clip_model: Optional[float] = field(default=1.0)
     grad_clip_alphas: Optional[float] = field(default=1.0)
 
@@ -63,6 +63,7 @@ class DnasConfig:
     gumbel_temperature: float = field(default=1.0)
     a: float = field(default=0.2)
     b: float = field(default=0.6)
+    compute_mode: str = field(default="none")
 
 @dataclass
 class TrainExperimentConfig:

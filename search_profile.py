@@ -1,3 +1,4 @@
+import math
 from typing import Tuple, Optional
 from contextlib import nullcontext
 from collections import defaultdict
@@ -51,12 +52,16 @@ def train_alphas_step(
     ctx: torch.cuda.amp.autocast | nullcontext,
     scaler: torch.cuda.amp.GradScaler,
     grad_clip: Optional[float] = None,
+    temperature: Optional[float] = None
 ) -> Tuple[float, float, float]:
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
     inputs, targets = inputs.to(device), targets.to(device)
     optimizer.zero_grad(set_to_none=True)
+
+    if temperature is not None:
+        model.set_temperature(temperature)
 
     with ctx:
         _, loss, loss_compute = model(inputs, targets, return_loss_compute=True)
@@ -82,7 +87,7 @@ def main(cfg: SearchExperimentConfig) -> None:
 
     train_loader, val_loader = get_dataloaders(cfg.data)
 
-    num_steps = len(train_loader) * cfg.train.epochs
+    num_steps = len(train_loader) * cfg.train.epoch
     num_steps_model_only = int(num_steps * cfg.train.train_router_steps)
     num_steps_alphas = num_steps - num_steps_model_only
 
@@ -121,6 +126,12 @@ def main(cfg: SearchExperimentConfig) -> None:
             min_lr=cfg.train.lr_alphas / 10
         )
 
+        temperature_scheduler = utils.TemperatureScheduler(
+            max_temperature=cfg.dnas.gumbel_temperature, 
+            min_temperature=cfg.dnas.gumbel_temperature / 10, 
+            max_steps=num_steps_alphas
+        )
+
         alphas_values = []
         for step in pbar:
             optimizer_alphas.zero_grad(set_to_none=True)
@@ -140,6 +151,7 @@ def main(cfg: SearchExperimentConfig) -> None:
         
             if step > (num_steps_model_only - 1):
                 lr_alphas = scheduler_alphas.update(step - num_steps_model_only + 1)
+                temperature = temperature_scheduler.update(step - num_steps_model_only)
 
                 total_loss, loss, loss_compute = train_alphas_step(
                     model=model,
@@ -149,7 +161,8 @@ def main(cfg: SearchExperimentConfig) -> None:
                     train_loader=train_loader,
                     ctx=ctx,
                     scaler=scaler_alphas,
-                    grad_clip=cfg.train.grad_clip_alphas
+                    grad_clip=cfg.train.grad_clip_alphas,
+                    temperature=temperature
                 )
                 pbar.set_description(f"Searching Model: Step {step} - Training Alphas - Loss: {loss:.4f} - Loss Compute: {loss_compute:.4f} - Total Loss: {total_loss:.4f}")
                 wandb.log({
@@ -163,8 +176,8 @@ def main(cfg: SearchExperimentConfig) -> None:
                 })
             
             else:
-                wandb.log({"search/loss_model": loss, "search/step": step, "search/lr_model": lr_model})
-                pbar.set_description(f"Searching Model: Step {step} - Training Model Weights - Loss: {loss:.4f}")
+                wandb.log({"search/loss_model": loss_model_step, "search/step": step, "search/lr_model": lr_model})
+                pbar.set_description(f"Searching Model: Step {step} - Training Model Weights - Loss: {loss_model_step:.4f}")
 
 
             if step % cfg.train.log_interval == 0:
@@ -182,6 +195,13 @@ def main(cfg: SearchExperimentConfig) -> None:
                     alphas_historical["alphas"].extend(alphas_values)
                     alphas_historical["weights"].extend(weight_values)
                     alphas_historical["step"].extend(step_list)
+                
+                picked_alphas = {}
+                for block_idx, block in enumerate(model.get_blocks()):
+                    picked_idx = block.alphas.detach().argmax(dim=-1)
+                    picked_alphas[f"search/layer_{block_idx}"] = cfg.dnas.capacity_ratio_search_space[picked_idx]
+                
+                wandb.log(picked_alphas)
 
         # Log one more time at the end
         table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
