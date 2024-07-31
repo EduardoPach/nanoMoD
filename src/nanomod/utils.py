@@ -185,7 +185,7 @@ class TemperatureExponentialDecay:
     def __init__(self, max_temperature: float, min_temperature: float, max_steps: int) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be a positive integer")
-        if max_value <= min_value:
+        if max_temperature <= min_temperature:
             raise ValueError("max_value must be greater than min_value")
         
         self.max_temperature = max_temperature
