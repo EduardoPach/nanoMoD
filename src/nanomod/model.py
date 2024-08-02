@@ -233,7 +233,7 @@ class GPT(nn.Module):
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
             # Kinda hacky but if we're using DnasBlock we want to unpack regardless of `use_mod` and `mod_idxs`
-            if (self.config.use_mod and layer_idx in self.mod_idxs) or (self.is_dnas):
+            if (self.config.use_mod and layer_idx in self.mod_idxs) or (self.is_dnas) or (isinstance(block, MoDBlock)):
                 # If we are using DnasBlock router_logits and selected_indices are tuples
                 x, router_logits, selected_indices = x
                 all_router_logits += (router_logits,)
@@ -458,6 +458,12 @@ class DnasBlock(nn.Module):
         init_value = 1 / len(self.capacity_ratio_search_space)
         return nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
 
+    @torch.no_grad()
+    def sample(self) -> nn.Module:
+        weights = gumbel_softmax(self.alphas, temperature=self.temperature)
+        block = torch.multinomial(weights, num_samples=1).item()
+        return self.blocks[block]
+
     def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # TODO: Maybe allow temperature scheduling
         weights = gumbel_softmax(self.alphas, temperature=self.temperature)
@@ -525,6 +531,13 @@ class DnasSearchModel(nn.Module):
 
     def get_blocks(self) -> List[DnasBlock]:
         return self.model.transformer.h
+
+    def sample_architecture(self) -> nn.Module:
+        blocks = [block.sample() for block in self.get_blocks()]
+        sample_model = copy.deepcopy(self.model)
+        sample_model.transformer.h = nn.ModuleList(blocks)
+
+        return sample_model
     
     def freeze(self) -> None:
         for name, param in self.model.named_parameters():

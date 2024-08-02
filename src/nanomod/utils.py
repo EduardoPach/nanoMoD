@@ -282,9 +282,14 @@ def get_flop_per_block(hidden_size: int, seq_len: int, num_heads: int, capacity_
 
     return block_flops(hidden_size, int(capacity_ratio * seq_len), num_heads)
 
-def load_checkpoint(checkpoint: str = "model-ckpt:latest") -> Tuple[Dict[str, torch.Tensor], GPTConfig]:
-    artifact = wandb.use_artifact(f'eduardopacheco/nanoMoD/{checkpoint}', type='model')
-    artifact_dir = artifact.download()
+def load_checkpoint(checkpoint: str = "model-ckpt:latest", use_wandb: bool = True) -> Tuple[Dict[str, torch.Tensor], GPTConfig]:
+    if use_wandb:
+        artifact = wandb.use_artifact(checkpoint, type='model')
+        artifact = wandb.use_artifact(f'eduardopacheco/nanoMoD/{checkpoint}', type='model')
+        artifact_dir = artifact.download()
+    else:
+        artifact_dir = "/teamspace/studios/this_studio/nanoMoD/artifacts/model-ckpt:v0"
+        
     checkpoint = torch.load(os.path.join(artifact_dir, "ckpt.pt"), map_location="cpu")
     config = GPTConfig(**checkpoint['model_config'])
     state_dict = checkpoint['model']

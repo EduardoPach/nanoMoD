@@ -1,4 +1,5 @@
 import math
+from logging import getLogger
 from typing import Tuple, Optional
 from contextlib import nullcontext
 from collections import defaultdict
@@ -14,6 +15,8 @@ from nanomod import utils
 from nanomod.model import DnasSearchModel, GPT
 from nanomod.dataset import get_dataloaders
 from nanomod.configuration import SearchExperimentConfig, set_config_store
+
+logger = getLogger(__name__)
 
 
 def train_model_step(
@@ -79,7 +82,7 @@ def train_alphas_step(
     return total_loss.item(), loss.item(), loss_compute.item()
 
 @hydra.main(config_path="config", config_name="config_search")
-def main(cfg: SearchExperimentConfig) -> None:
+def search(cfg: SearchExperimentConfig) -> None:
     device = utils.get_best_device()
     wandb_mode = "online" if cfg.train.use_wandb else "disabled"
     ctx, scaler_model = utils.get_train_context_and_scaler(cfg, device)
@@ -91,16 +94,16 @@ def main(cfg: SearchExperimentConfig) -> None:
     num_steps_model_only = int(num_steps * cfg.train.train_router_steps)
     num_steps_alphas = num_steps - num_steps_model_only
 
-    tokens_per_step = cfg.data.batch_size * cfg.data.seq_len
     alphas_historical = defaultdict(list)
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"Searching Model: Step 0 - Training Model Weights", unit="step")
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="search", mode=wandb_mode):
-        state_dict, model_config = utils.load_checkpoint()
+        state_dict, model_config = utils.load_checkpoint(use_wandb=cfg.train.use_wandb)
         base_model = GPT(model_config)
         base_model.load_state_dict(state_dict)
         model = DnasSearchModel(base_model, cfg.dnas)
-        model.freeze()
+        if not cfg.dnas.all_trainable:
+            model.freeze()
         model.to(device)
         model.train()
 
@@ -206,8 +209,16 @@ def main(cfg: SearchExperimentConfig) -> None:
 
         # Log one more time at the end
         table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
-        wandb.log({"search/alphas_historical": table})
+        logger.info(f"Sampling model...")
+        sample_model = model.sample_architecture()
+        logger.info(f"Evaluating model...")
+        sample_model_val_loss = utils.estimate_loss(sample_model, val_loader, cfg.train.eval_iterations, ctx)
+        logger.info(f"Sample model validation loss: {sample_model_val_loss:.4f} -> logging to wandb...")
+        wandb.log({"search/alphas_historical": table, "search/val_loss": sample_model_val_loss})
+
+def main() -> None:
+    set_config_store()
+    search()
 
 if __name__ == "__main__":
-    set_config_store()
     main()

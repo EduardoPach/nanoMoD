@@ -64,6 +64,7 @@ class DnasConfig:
     a: float = field(default=0.2)
     b: float = field(default=0.6)
     compute_mode: str = field(default="none")
+    all_trainable: bool = field(default=False)
 
 @dataclass
 class TrainExperimentConfig:
