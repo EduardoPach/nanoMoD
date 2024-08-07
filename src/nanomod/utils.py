@@ -1,8 +1,9 @@
 import os
 import time
 import math
-from typing import Tuple, Optional, Dict
+from functools import partial
 from contextlib import nullcontext
+from typing import Tuple, Optional, Dict
 
 import torch
 import wandb
@@ -296,8 +297,29 @@ def load_checkpoint(checkpoint: str = "model-ckpt:latest", use_wandb: bool = Tru
 
     return state_dict, config
 
+
+def get_compute_compression(config: GPTConfig, capacity_ratio_profile: List[float]) -> float:
+    block_flop = partial(get_flop_per_block, hidden_size=config.n_embd, seq_len=config.block_size, num_heads=config.n_head)
+    
+    baseline_flops = total_flops(config)
+
+
+
+    baseline_flops_blocks = block_flop(capacity_ratio=1.0) * config.n_layer
+    profile_flops = sum([block_flop(capacity_ratio=capacity_ratio) for capacity_ratio in capacity_ratio_profile])
+
+    return 1 - (baseline_flops - baseline_flops_blocks + profile_flops) / baseline_flops
+
 def log_table(**kwargs) -> None:
     if kwargs is None:
         return
     df = pd.DataFrame([kwargs])
     wandb.log({"table": wandb.Table(dataframe=df)})
+
+def get_distillation_loss(loss_type: str) -> torch.nn.Module:
+    if loss_type == "mse":
+        return torch.nn.MSELoss()
+    elif loss_type == "kl":
+        return torch.nn.KLDivLoss(reduction='batchmean')
+    else:
+        raise ValueError(f"Unknown distillation loss type: {loss_type}")

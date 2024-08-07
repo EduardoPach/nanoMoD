@@ -459,13 +459,17 @@ class DnasBlock(nn.Module):
         return nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
 
     @torch.no_grad()
-    def sample(self) -> nn.Module:
-        weights = gumbel_softmax(self.alphas, temperature=self.temperature)
-        block = torch.multinomial(weights, num_samples=1).item()
-        return self.blocks[block]
+    def sample(self, hard: bool = False) -> nn.Module:
+        if hard:
+            block_idx = self.alphas.argmax().item()
+        else:
+            weights = gumbel_softmax(self.alphas, temperature=self.temperature)
+            block_idx = torch.multinomial(weights, num_samples=1).item()
+
+        return self.blocks[block_idx]
 
     def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # TODO: Maybe allow temperature scheduling
+        # NOTE: Temperature scheduling is done through setting temperature in DnasSearchModel
         weights = gumbel_softmax(self.alphas, temperature=self.temperature)
         output = 0
         block_router_logits = ()
@@ -495,8 +499,11 @@ class DnasSearchModel(nn.Module):
     def prepare_model(self, model: nn.Module) -> nn.Module:
         blocks = model.transformer.h
         dnas_blocks = []
-        for block in blocks:
-            dnas_block = DnasBlock(self.config, model_config=self.model_config, model=block)
+        for block_idx, block in enumerate(blocks):
+            if self.config.fix_first_last and (block_idx == 0 or block_idx == len(blocks) - 1):
+                dnas_block = block
+            else:
+                dnas_block = DnasBlock(self.config, model_config=self.model_config, model=block)
             dnas_blocks.append(dnas_block)
         
         model.transformer.h = nn.ModuleList(dnas_blocks)
@@ -529,15 +536,18 @@ class DnasSearchModel(nn.Module):
         else:
             raise ValueError(f"Invalid compute mode: {self.config.compute_mode}")
 
-    def get_blocks(self) -> List[DnasBlock]:
+    def get_blocks(self) -> List[DnasBlock | Block]:
         return self.model.transformer.h
 
-    def sample_architecture(self) -> nn.Module:
-        blocks = [block.sample() for block in self.get_blocks()]
+    def sample_architecture(self, hard: bool = False) -> Tuple[nn.Module, float]:
+        blocks = [block.sample(hard) if isinstance(block, DnasBlock) else block for block in self.get_blocks()]
+        capacity_ratio_profile = [block.capacity_ratio if hasattr(block, "capacity_ratio") else 1.0 for block in blocks]
+        compute_compression = utils.get_compute_compression(self.model_config, capacity_ratio_profile)
+
         sample_model = copy.deepcopy(self.model)
         sample_model.transformer.h = nn.ModuleList(blocks)
 
-        return sample_model
+        return sample_model, compute_compression
     
     def freeze(self) -> None:
         for name, param in self.model.named_parameters():
@@ -555,8 +565,11 @@ class DnasSearchModel(nn.Module):
     def capacity_profile(self) -> Dict[str, float]:
         profile = {}
         for idx, block in enumerate(self.get_blocks()):
-            selected_indice = block.alphas.argmax().item()
-            profile[f"layer_{idx}"] = self.config.capacity_ratio_search_space[selected_indice]
+            if not isinstance(block, DnasBlock):
+                profile[f"layer_{idx}"] = 1.0
+            else:
+                selected_indice = block.alphas.argmax().item()
+                profile[f"layer_{idx}"] = self.config.capacity_ratio_search_space[selected_indice]
         
         return profile
     
@@ -564,6 +577,8 @@ class DnasSearchModel(nn.Module):
         loss = 0
         capacity_ratios = self.config.capacity_ratio_search_space
         for block in self.get_blocks():
+            if not isinstance(block, DnasBlock):
+                continue
             alphas = block.alphas
             weights = gumbel_softmax(alphas, temperature=self.config.gumbel_temperature)
             loss += torch.sum(weights * self.compute_tensor)
@@ -571,8 +586,10 @@ class DnasSearchModel(nn.Module):
         return torch.log(loss)
 
     def set_temperature(self, temperature: float) -> None:
+        # Updates temperature for all DnasBlocks i.e. blocks with temperature attribute
         for block in self.get_blocks():
-            block.temperature = temperature
+            if hasattr(block, "temperature"):
+                block.temperature = temperature
     
     def forward(
         self, 

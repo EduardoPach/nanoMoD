@@ -20,20 +20,37 @@ logger = getLogger(__name__)
 
 
 def train_model_step(
+    base_model: GPT | None,
     model: DnasSearchModel, 
     optimizer: torch.optim.Optimizer, 
     train_loader: torch.utils.data.DataLoader,
     ctx: torch.cuda.amp.autocast | nullcontext,
     scaler: torch.cuda.amp.GradScaler,
-    grad_clip: Optional[float] = None
+    grad_clip: Optional[float] = None,
+    distillation_loss: Optional[nn.Module] = None
 ) -> float:
+    if base_model is not None and distillation_loss is None:
+        raise ValueError("Must provide distillation loss when using distillation")
+
+    if cfg.data.train_dataset == "random" and not cfg.train.use_distillation:
+        raise ValueError("Random dataset requires distillation to be enabled")
+
+    base_model.eval()
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
     inputs, targets = inputs.to(device), targets.to(device)
     optimizer.zero_grad(set_to_none=True)
     with ctx:
-        _, loss = model(inputs, targets)
+        if base_model is not None:
+            with torch.no_grad():
+                base_logits, _ = base_model(inputs)
+            logits, _ = model(inputs)
+        else:
+            _, loss = model(inputs, targets)
+    
+    if base_model is not None:
+        loss = distillation_loss(logits, base_logits)
     
     scaler.scale(loss).backward()
     if grad_clip is not None:
@@ -47,6 +64,7 @@ def train_model_step(
 
 
 def train_alphas_step(
+    base_model: GPT | None,
     model: DnasSearchModel, 
     a: float,
     b: float,
@@ -55,8 +73,12 @@ def train_alphas_step(
     ctx: torch.cuda.amp.autocast | nullcontext,
     scaler: torch.cuda.amp.GradScaler,
     grad_clip: Optional[float] = None,
-    temperature: Optional[float] = None
+    temperature: Optional[float] = None,
+    distillation_loss: Optional[nn.Module] = None
 ) -> Tuple[float, float, float]:
+    if base_model is not None and distillation_loss is None:
+        raise ValueError("Must provide distillation loss when using distillation")
+    base_model.eval()
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
@@ -67,8 +89,16 @@ def train_alphas_step(
         model.set_temperature(temperature)
 
     with ctx:
-        _, loss, loss_compute = model(inputs, targets, return_loss_compute=True)
+        if base_model is not None:
+            with torch.no_grad():
+                base_logits, _ = base_model(inputs)
+            logits, _, loss_compute= model(inputs, return_loss_compute=True)
+        else:
+            _, loss, loss_compute = model(inputs, targets, return_loss_compute=True)
     
+    if base_model is not None:
+        loss = distillation_loss(logits, base_logits)
+
     total_loss = loss + a * loss_compute ** b
 
     scaler.scale(total_loss).backward()
@@ -91,17 +121,28 @@ def search(cfg: SearchExperimentConfig) -> None:
     train_loader, val_loader = get_dataloaders(cfg.data)
 
     num_steps = len(train_loader) * cfg.train.epochs
+    max_steps = cfg.train.max_steps if cfg.train.max_steps is not None else math.inf
     num_steps_model_only = int(num_steps * cfg.train.train_router_steps)
     num_steps_alphas = num_steps - num_steps_model_only
 
+    distillation_loss = None
+    if cfg.train.use_distillation:
+        distillation_loss = utils.get_distillation_loss(cfg.train.distillation_loss)
+
     alphas_historical = defaultdict(list)
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"Searching Model: Step 0 - Training Model Weights", unit="step")
+
+    tags = ["search", "dnas", cfg.data.dataset]
+    if cfg.train.use_distillation:
+        tags.append("distillation")
 
     with wandb.init(project="nanoMoD", config=dict(cfg), job_type="search", mode=wandb_mode):
         state_dict, model_config = utils.load_checkpoint(use_wandb=cfg.train.use_wandb)
         base_model = GPT(model_config)
         base_model.load_state_dict(state_dict)
-        model = DnasSearchModel(base_model, cfg.dnas)
+        if cfg.train.use_distillation:
+            model = DnasSearchModel(copy.deepcopy(base_model), cfg.dnas)
+            base_model.to(device)
         if not cfg.dnas.all_trainable:
             model.freeze()
         model.to(device)
@@ -135,28 +176,32 @@ def search(cfg: SearchExperimentConfig) -> None:
             max_steps=num_steps_alphas
         )
 
-        alphas_values = []
         for step in pbar:
+            if step >= cfg.train.max_steps:
+                break
+
             optimizer_alphas.zero_grad(set_to_none=True)
             optimizer_router.zero_grad(set_to_none=True)
 
             lr_model = scheduler_router.update(step+1)
 
             loss_model_step = train_model_step(
+                base_model=base_model if cfg.train.use_distillation else None,
                 model=model, 
                 optimizer=optimizer_router, 
                 train_loader=train_loader,
                 ctx=ctx,
                 scaler=scaler_model,
-                grad_clip=cfg.train.grad_clip_model
+                grad_clip=cfg.train.grad_clip_model,
+                distillation_loss=distillation_loss
             )
     
-        
             if step > (num_steps_model_only - 1):
                 lr_alphas = scheduler_alphas.update(step - num_steps_model_only + 1)
                 temperature = temperature_scheduler.update(step - num_steps_model_only)
 
                 total_loss, loss, loss_compute = train_alphas_step(
+                    base_model=base_model if cfg.train.use_distillation else None,
                     model=model,
                     a=cfg.dnas.a,
                     b=cfg.dnas.b,
@@ -165,7 +210,8 @@ def search(cfg: SearchExperimentConfig) -> None:
                     ctx=ctx,
                     scaler=scaler_alphas,
                     grad_clip=cfg.train.grad_clip_alphas,
-                    temperature=temperature
+                    temperature=temperature,
+                    distillation_loss=distillation_loss
                 )
                 pbar.set_description(f"Searching Model: Step {step} - Training Alphas - Loss: {loss:.4f} - Loss Compute: {loss_compute:.4f} - Total Loss: {total_loss:.4f}")
                 wandb.log({
@@ -204,17 +250,24 @@ def search(cfg: SearchExperimentConfig) -> None:
                 for block_idx, block in enumerate(model.get_blocks()):
                     picked_idx = block.alphas.detach().argmax(dim=-1).item()
                     picked_alphas[f"search/layer_{block_idx}"] = cfg.dnas.capacity_ratio_search_space[picked_idx]
+                    picked_alphas["search/compute_compression"] = utils.get_compute_compression(cfg.model, list(picked_alphas.values()))
                 
                 wandb.log(picked_alphas)
 
+        if cfg.train.use_distillation:
+            del base_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
         # Log one more time at the end
         table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
         logger.info(f"Sampling model...")
-        sample_model = model.sample_architecture()
+        sample_model, compute_compression = model.sample_architecture(cfg.train.hard_sampling)
+        logger.info(f"Model Sampled with Compute Compression: {100*compute_compression:.2f}%")
         logger.info(f"Evaluating model...")
         sample_model_val_loss = utils.estimate_loss(sample_model, val_loader, cfg.train.eval_iterations, ctx)
         logger.info(f"Sample model validation loss: {sample_model_val_loss:.4f} -> logging to wandb...")
-        wandb.log({"search/alphas_historical": table, "search/val_loss": sample_model_val_loss})
+        wandb.log({"search/alphas_historical": table, "search/val_loss": sample_model_val_loss, "search/final_compute_compression": compute_compression})
 
 def main() -> None:
     set_config_store()

@@ -1,0 +1,15 @@
+epochs: 3
+lr_model: 6e-4
+lr_alphas: 6e-3
+log_interval: 50
+eval_iterations: 100
+use_wandb: true
+use_fp16: true
+grad_clip_model: null
+grad_clip_alphas: null
+watch_model: false
+watch_mode: gradients
+train_router_steps: 0.5
+hard_sampling: true
+use_distillation: false
+max_steps: null
