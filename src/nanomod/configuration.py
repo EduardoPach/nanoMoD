@@ -128,8 +128,6 @@ class TrainDnasConfig(TrainConfig):
         The gradient clipping value to use for the alphas. Default is 1.0.
     - use_distillation: bool:
         Whether to use distillation. Default is False.
-    - hard_sampling: bool:
-        Whether to use hard sampling i.e. argmax when sampling from DnasSearchModel. Default is False.
     - distillation_loss: str:
         The loss to use for distillation either "mse" or "kl". Default is "mse".
     """
@@ -139,7 +137,6 @@ class TrainDnasConfig(TrainConfig):
     grad_clip_model: Optional[float] = field(default=1.0)
     grad_clip_alphas: Optional[float] = field(default=1.0)
     use_distillation: bool = field(default=False)
-    hard_sampling: bool = field(default=False)
     distillation_loss: str = field(default="mse")
 
 @dataclass
@@ -165,6 +162,8 @@ class DnasConfig:
         Whether all parameters are trainable. Default is False.
     - fix_first_last: bool:
         Whether to fix the first and last layer. Default
+    - hard_sampling: bool:
+        Whether to use hard sampling i.e. argmax when sampling from DnasSearchModel. Default is False.
     """
     capacity_ratio_search_space: Tuple[float, ...] = field(default=(0.1, 0.4, 0.7, 1.0))
     share_router_weights: bool = field(default=False)
@@ -174,6 +173,7 @@ class DnasConfig:
     compute_mode: str = field(default="none")
     all_trainable: bool = field(default=False)
     fix_first_last: bool = field(default=False)
+    hard_sampling: bool = field(default=False)
 
 @dataclass
 class TrainExperimentConfig:

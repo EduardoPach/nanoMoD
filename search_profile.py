@@ -35,7 +35,6 @@ def train_model_step(
     if cfg.data.train_dataset == "random" and not cfg.train.use_distillation:
         raise ValueError("Random dataset requires distillation to be enabled")
 
-    base_model.eval()
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
@@ -43,6 +42,7 @@ def train_model_step(
     optimizer.zero_grad(set_to_none=True)
     with ctx:
         if base_model is not None:
+            base_model.eval()
             with torch.no_grad():
                 base_logits, _ = base_model(inputs)
             logits, _ = model(inputs)
@@ -78,7 +78,7 @@ def train_alphas_step(
 ) -> Tuple[float, float, float]:
     if base_model is not None and distillation_loss is None:
         raise ValueError("Must provide distillation loss when using distillation")
-    base_model.eval()
+
     model.train()
     device = next(model.parameters()).device
     inputs, targets = next(iter(train_loader))
@@ -90,6 +90,7 @@ def train_alphas_step(
 
     with ctx:
         if base_model is not None:
+            base_model.eval()
             with torch.no_grad():
                 base_logits, _ = base_model(inputs)
             logits, _, loss_compute= model(inputs, return_loss_compute=True)
@@ -140,11 +141,14 @@ def search(cfg: SearchExperimentConfig) -> None:
         state_dict, model_config = utils.load_checkpoint(use_wandb=cfg.train.use_wandb)
         base_model = GPT(model_config)
         base_model.load_state_dict(state_dict)
+
         if cfg.train.use_distillation:
             model = DnasSearchModel(copy.deepcopy(base_model), cfg.dnas)
             base_model.to(device)
+
         if not cfg.dnas.all_trainable:
             model.freeze()
+
         model.to(device)
         model.train()
 
@@ -232,8 +236,10 @@ def search(cfg: SearchExperimentConfig) -> None:
 
             if step % cfg.train.log_interval == 0:
                 for block_idx, block in enumerate(model.get_blocks()):
-                    alphas_values = block.alphas.detach().cpu()
+                    if not hasattr(block, "alphas"):
+                        continue
 
+                    alphas_values = block.alphas.detach().cpu()
                     weight_values = alphas_values.softmax(dim=-1).tolist()
                     alphas_values = alphas_values.tolist()
                     capacity_ratios = cfg.dnas.capacity_ratio_search_space
@@ -245,14 +251,21 @@ def search(cfg: SearchExperimentConfig) -> None:
                     alphas_historical["alphas"].extend(alphas_values)
                     alphas_historical["weights"].extend(weight_values)
                     alphas_historical["step"].extend(step_list)
-                
-                picked_alphas = {}
-                for block_idx, block in enumerate(model.get_blocks()):
-                    picked_idx = block.alphas.detach().argmax(dim=-1).item()
-                    picked_alphas[f"search/layer_{block_idx}"] = cfg.dnas.capacity_ratio_search_space[picked_idx]
-                    picked_alphas["search/compute_compression"] = utils.get_compute_compression(cfg.model, list(picked_alphas.values()))
-                
-                wandb.log(picked_alphas)
+
+                val_loss = utils.estimate_loss(model, val_loader, cfg.train.eval_iterations, ctx)
+                model.train() # This would be done in the training steps, but just in case doing here as well
+
+                log_dict = {
+                    f"search/{block_key}": capacity_ratio 
+                    for block_key, capacity_ratio 
+                    in model.capacity_profile.items()
+                }
+                log_dict["search/compute_compression"] = utils.get_compute_compression(
+                    cfg.model, 
+                    list(capacity_ratio_profile.values())
+                )
+                log_dict["search/val_loss"] = val_loss
+                wandb.log(log_dict)
 
         if cfg.train.use_distillation:
             del base_model
@@ -261,13 +274,21 @@ def search(cfg: SearchExperimentConfig) -> None:
                 
         # Log one more time at the end
         table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
-        logger.info(f"Sampling model...")
-        sample_model, compute_compression = model.sample_architecture(cfg.train.hard_sampling)
-        logger.info(f"Model Sampled with Compute Compression: {100*compute_compression:.2f}%")
+        capacity_ratio_profile = model.capacity_profile
+        compute_compression = utils.get_compute_compression(cfg.model, capacity_ratio_profile)
+
+        logger.info(f"Final capacity profile: {capacity_ratio_profile}")
+        logger.info(f"Final compute compression: {compute_compression}")
+        
         logger.info(f"Evaluating model...")
-        sample_model_val_loss = utils.estimate_loss(sample_model, val_loader, cfg.train.eval_iterations, ctx)
+        sample_model_val_loss = utils.estimate_loss(model, val_loader, cfg.train.eval_iterations, ctx)
+
         logger.info(f"Sample model validation loss: {sample_model_val_loss:.4f} -> logging to wandb...")
-        wandb.log({"search/alphas_historical": table, "search/val_loss": sample_model_val_loss, "search/final_compute_compression": compute_compression})
+        wandb.log({
+            "search/alphas_historical": table, 
+            "search/final_val_loss": sample_model_val_loss, 
+            "search/final_compute_compression": compute_compression
+        })
 
 def main() -> None:
     set_config_store()

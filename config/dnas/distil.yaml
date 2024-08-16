@@ -6,3 +6,4 @@ compute_mode: sqrt
 share_router_weights: false
 all_trainable: false
 fix_first_last: true
+hard_sampling: true

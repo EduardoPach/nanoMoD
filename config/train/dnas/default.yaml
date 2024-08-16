@@ -10,6 +10,5 @@ grad_clip_alphas: null
 watch_model: false
 watch_mode: gradients
 train_router_steps: 0.5
-hard_sampling: true
 use_distillation: false
 max_steps: null

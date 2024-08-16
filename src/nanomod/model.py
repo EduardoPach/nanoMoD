@@ -459,18 +459,24 @@ class DnasBlock(nn.Module):
         return nn.Parameter(torch.tensor([init_value] * len(self.capacity_ratio_search_space)))
 
     @torch.no_grad()
-    def sample(self, hard: bool = False) -> nn.Module:
+    def sample(self, hard: bool = False) -> int:
+        """Returns the index of the selected block"""
         if hard:
             block_idx = self.alphas.argmax().item()
         else:
             weights = gumbel_softmax(self.alphas, temperature=self.temperature)
             block_idx = torch.multinomial(weights, num_samples=1).item()
 
-        return self.blocks[block_idx]
+        return block_idx
 
     def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # NOTE: Temperature scheduling is done through setting temperature in DnasSearchModel
-        weights = gumbel_softmax(self.alphas, temperature=self.temperature)
+        if self.training:
+            weights = gumbel_softmax(self.alphas, temperature=self.temperature)
+        else:
+            weights = torch.zeros_like(self.alphas)
+            weights[self.alphas.argmax()] = 1.0
+
         output = 0
         block_router_logits = ()
         block_selected_indices = ()
@@ -487,6 +493,10 @@ class DnasBlock(nn.Module):
         return output, block_router_logits, block_selected_indices
     
 class DnasSearchModel(nn.Module):
+    """
+    Supernet model for DNAS search. If not training it will 
+    sample the DnasBlock according to `config.hard_sampling`
+    """
     def __init__(self, model: nn.Module, config: DnasConfig):
         super().__init__()
         self.config = config
@@ -494,7 +504,6 @@ class DnasSearchModel(nn.Module):
 
         self.model = self.prepare_model(model)
         self.register_buffer("compute_tensor", self._init_compute_tensor(), persistent=False)
-
 
     def prepare_model(self, model: nn.Module) -> nn.Module:
         blocks = model.transformer.h
@@ -538,16 +547,6 @@ class DnasSearchModel(nn.Module):
 
     def get_blocks(self) -> List[DnasBlock | Block]:
         return self.model.transformer.h
-
-    def sample_architecture(self, hard: bool = False) -> Tuple[nn.Module, float]:
-        blocks = [block.sample(hard) if isinstance(block, DnasBlock) else block for block in self.get_blocks()]
-        capacity_ratio_profile = [block.capacity_ratio if hasattr(block, "capacity_ratio") else 1.0 for block in blocks]
-        compute_compression = utils.get_compute_compression(self.model_config, capacity_ratio_profile)
-
-        sample_model = copy.deepcopy(self.model)
-        sample_model.transformer.h = nn.ModuleList(blocks)
-
-        return sample_model, compute_compression
     
     def freeze(self) -> None:
         for name, param in self.model.named_parameters():
@@ -561,14 +560,13 @@ class DnasSearchModel(nn.Module):
         return [param for name, param in self.model.named_parameters() if "router" in name]
     
     @property
-    @torch.no_grad()
     def capacity_profile(self) -> Dict[str, float]:
         profile = {}
         for idx, block in enumerate(self.get_blocks()):
             if not isinstance(block, DnasBlock):
                 profile[f"layer_{idx}"] = 1.0
             else:
-                selected_indice = block.alphas.argmax().item()
+                selected_indice = block.sample(hard=self.config.hard_sampling)
                 profile[f"layer_{idx}"] = self.config.capacity_ratio_search_space[selected_indice]
         
         return profile
