@@ -34,40 +34,39 @@ class OpenWebText(torch.utils.data.Dataset):
         return torch.from_numpy(x.astype(np.int64)), torch.from_numpy(y.astype(np.int64))
 
 
-class RandomTokenDataset(Dataset):
+
+class RandomTokenDataset(torch.utils.data.Dataset):
     def __init__(self, seq_len: int, vocab_size: int, num_tokens: Optional[int] = None, seed: int = 13, dynamic: bool = False):
         self.vocab_size = vocab_size
+        self.num_tokens = int(num_tokens) if num_tokens is not None else int(10e6)  # Convert to integer
         self.seq_len = seq_len
-        self.num_tokens = num_tokens if num_tokens is not None else 1e12 # A large number
-        self.num_sequences = num_tokens // seq_len
+        self.num_sequences = self.num_tokens // self.seq_len
         self.seed = seed
         self.dynamic = dynamic
         self.dynamic_counter = 0
 
-        torch.manual_seed(seed)
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
+        
+        if not dynamic:
+            self.rng = torch.Generator()
+            self.rng.manual_seed(seed)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.num_sequences
 
-    def __getitem__(self, idx):
-        if self.seed is not None:
-            if not self.dynamic:
-                # Static behavior: always the same sequence for the same index
-                state = self.rng.getstate()
-                self.rng.seed(self.seed + idx)
-            else:
-                # Dynamic but reproducible behavior
-                state = self.rng.getstate()
-                self.rng.seed(self.seed + idx + self.dynamic_counter)
-                self.dynamic_counter += 1
+    def __getitem__(self, idx) -> Tuple[torch.Tensor, torch.Tensor]:
+        if not self.dynamic:
+            # Static behavior: always the same sequence for the same index
+            self.rng.manual_seed(self.seed + idx)
+        else:
+            # Dynamic but reproducible behavior
+            dynamic_seed = self.seed + idx + self.dynamic_counter
+            self.generator.manual_seed(dynamic_seed)
+            self.dynamic_counter += 1
         
         # Generate a sequence of length seq_len + 1
         full_sequence = torch.randint(0, self.vocab_size, (self.seq_len + 1,), generator=self.generator)
-        
-        if self.seed is not None:
-            self.rng.setstate(state)
         
         # Split the sequence into input and target
         input_sequence = full_sequence[:-1]
@@ -79,18 +78,21 @@ class RandomTokenDataset(Dataset):
         """Reset the dynamic counter, e.g., at the start of each epoch"""
         self.dynamic_counter = 0
 
-def get_dataloaders(cfg: DataConfig) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+def get_dataloaders(cfg: DataConfig, vocab_size: Optional[int] = None) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     """
     Get the train and validation data loaders. Regardless of the `train_dataset` configuration, the validation dataset
     is always OpenWebText.
 
     Args:
     - cfg (DataConfig): The data configuration.
+    - vocab_size (int): The size of the vocabulary.
     """
     if cfg.train_dataset == "openwebtext":
+        if vocab_size is not None:
+            print("Warning: vocab_size is ignored when using OpenWebText.")
         train_dataset = OpenWebText("train", cfg.seq_len, cfg.num_tokens, cfg.seed)
     elif cfg.train_dataset == "random":
-        train_dataset = RandomTokenDataset(cfg.seq_len, cfg.vocab_size, None, cfg.seed)
+        train_dataset = RandomTokenDataset(cfg.seq_len, vocab_size, None, cfg.seed)
     else:
         raise ValueError(f"Unknown dataset: {cfg.train_dataset}")
     val_dataset = OpenWebText("val", cfg.seq_len, cfg.num_tokens, cfg.seed)

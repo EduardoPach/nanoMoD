@@ -1,4 +1,5 @@
 import math
+import copy
 from logging import getLogger
 from typing import Tuple, Optional
 from contextlib import nullcontext
@@ -7,6 +8,7 @@ from collections import defaultdict
 import hydra
 import wandb
 import torch
+from torch import nn
 import pandas as pd
 from tqdm import tqdm
 from torch.optim import AdamW
@@ -31,9 +33,6 @@ def train_model_step(
 ) -> float:
     if base_model is not None and distillation_loss is None:
         raise ValueError("Must provide distillation loss when using distillation")
-
-    if cfg.data.train_dataset == "random" and not cfg.train.use_distillation:
-        raise ValueError("Random dataset requires distillation to be enabled")
 
     model.train()
     device = next(model.parameters()).device
@@ -114,15 +113,18 @@ def train_alphas_step(
 
 @hydra.main(config_path="config", config_name="config_search")
 def search(cfg: SearchExperimentConfig) -> None:
+    assert cfg.data.train_dataset == "random" and cfg.train.use_distillation
+
     device = utils.get_best_device()
     wandb_mode = "online" if cfg.train.use_wandb else "disabled"
     ctx, scaler_model = utils.get_train_context_and_scaler(cfg, device)
     _, scaler_alphas = utils.get_train_context_and_scaler(cfg, device)
 
-    train_loader, val_loader = get_dataloaders(cfg.data)
+    train_loader, val_loader = get_dataloaders(cfg.data, cfg.model.vocab_size)
+
 
     num_steps = len(train_loader) * cfg.train.epochs
-    max_steps = cfg.train.max_steps if cfg.train.max_steps is not None else math.inf
+    num_steps = num_steps if num_steps < cfg.train.max_steps else cfg.train.max_steps
     num_steps_model_only = int(num_steps * cfg.train.train_router_steps)
     num_steps_alphas = num_steps - num_steps_model_only
 
@@ -133,7 +135,7 @@ def search(cfg: SearchExperimentConfig) -> None:
     alphas_historical = defaultdict(list)
     pbar = tqdm(range(num_steps), total=num_steps, desc=f"Searching Model: Step 0 - Training Model Weights", unit="step")
 
-    tags = ["search", "dnas", cfg.data.dataset]
+    tags = ["search", "dnas", cfg.data.train_dataset]
     if cfg.train.use_distillation:
         tags.append("distillation")
 

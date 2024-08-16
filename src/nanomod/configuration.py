@@ -45,6 +45,7 @@ class GPTConfig:
     capacity_ratio: float = 0.5
     use_mod: bool = True
     mod_freq: int = 2
+    use_darts: bool = False # IGNORED
 
 @dataclass
 class TrainConfig:

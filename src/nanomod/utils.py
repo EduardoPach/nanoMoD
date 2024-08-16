@@ -298,7 +298,7 @@ def load_checkpoint(checkpoint: str = "model-ckpt:latest", use_wandb: bool = Tru
     return state_dict, config
 
 
-def get_compute_compression(config: GPTConfig, capacity_ratio_profile: List[float]) -> float:
+def get_compute_compression(config: GPTConfig, capacity_ratio_profile: list[float]) -> float:
     block_flop = partial(get_flop_per_block, hidden_size=config.n_embd, seq_len=config.block_size, num_heads=config.n_head)
     
     baseline_flops = total_flops(config)

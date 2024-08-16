@@ -233,7 +233,7 @@ class GPT(nn.Module):
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
             # Kinda hacky but if we're using DnasBlock we want to unpack regardless of `use_mod` and `mod_idxs`
-            if (self.config.use_mod and layer_idx in self.mod_idxs) or (self.is_dnas) or (isinstance(block, MoDBlock)):
+            if isinstance(x, tuple):
                 # If we are using DnasBlock router_logits and selected_indices are tuples
                 x, router_logits, selected_indices = x
                 all_router_logits += (router_logits,)
@@ -245,7 +245,7 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             # If we are using DnasBlock we need to calculate the auxiliary loss
-            if self.config.use_mod or self.is_dnas:
+            if all_router_logits is not None:
                 aux_loss = self.compute_aux_loss(all_router_logits, all_selected_indices, t)
                 loss += aux_loss
         else:
@@ -258,7 +258,7 @@ class GPT(nn.Module):
     
     @property
     def is_dnas(self) -> bool:
-        return all(isinstance(block, DnasBlock) for block in self.transformer.h)
+        return any(isinstance(block, DnasBlock) for block in self.transformer.h)
     
     def compute_aux_loss(self, all_router_logits, all_selected_indices, seq_len):
         aux_loss = 0
