@@ -264,7 +264,7 @@ def search(cfg: SearchExperimentConfig) -> None:
                 }
                 log_dict["search/compute_compression"] = utils.get_compute_compression(
                     cfg.model, 
-                    list(capacity_ratio_profile.values())
+                    list(model.capacity_profile.values())
                 )
                 log_dict["search/val_loss"] = val_loss
                 wandb.log(log_dict)
@@ -277,7 +277,7 @@ def search(cfg: SearchExperimentConfig) -> None:
         # Log one more time at the end
         table = wandb.Table(dataframe=pd.DataFrame(alphas_historical))
         capacity_ratio_profile = model.capacity_profile
-        compute_compression = utils.get_compute_compression(cfg.model, capacity_ratio_profile)
+        compute_compression = utils.get_compute_compression(cfg.model, list(capacity_ratio_profile.values()))
 
         logger.info(f"Final capacity profile: {capacity_ratio_profile}")
         logger.info(f"Final compute compression: {compute_compression}")

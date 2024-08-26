@@ -151,7 +151,6 @@ class MoDBlock(nn.Module):
         compute_tokens = compute_tokens + self.attn(self.ln_1(compute_tokens))
         # Multiply router weights before adding residual
         compute_tokens = compute_tokens + self.mlp(self.ln_2(compute_tokens)) * selected_weights.unsqueeze(-1)
-
         # Merge compute and non-compute tokens
         x = torch.scatter(input=x, dim=1, index=selected_indices.unsqueeze(-1).repeat(1, 1, emb_dim), src=compute_tokens)
 

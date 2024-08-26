@@ -302,9 +302,6 @@ def get_compute_compression(config: GPTConfig, capacity_ratio_profile: list[floa
     block_flop = partial(get_flop_per_block, hidden_size=config.n_embd, seq_len=config.block_size, num_heads=config.n_head)
     
     baseline_flops = total_flops(config)
-
-
-
     baseline_flops_blocks = block_flop(capacity_ratio=1.0) * config.n_layer
     profile_flops = sum([block_flop(capacity_ratio=capacity_ratio) for capacity_ratio in capacity_ratio_profile])
 
