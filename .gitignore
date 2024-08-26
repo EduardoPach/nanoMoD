@@ -4,10 +4,14 @@ __pycache__/
 *$py.class
 .pdm-python
 wandb
+checkpoint_dir
+artifacts
+*.bin
+input.txt
 out
 # C extensions
 *.so
-
+outputs
 # Distribution / packaging
 .Python
 build/

@@ -1,0 +1,9 @@
+capacity_ratio_search_space: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+gumbel_temperature: 6.0
+a: 0.6
+b: 2.0
+compute_mode: sqrt
+share_router_weights: false
+all_trainable: false
+fix_first_last: true
+hard_sampling: true

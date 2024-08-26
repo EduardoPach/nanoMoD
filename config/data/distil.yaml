@@ -1,0 +1,7 @@
+train_dataset: random
+seq_len: 256
+num_tokens: 5000000 # This won't be used for the random data only validation
+batch_size: 64
+num_workers: 4
+pin_memory: true
+seed: 42

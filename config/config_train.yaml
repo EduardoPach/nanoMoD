@@ -1,0 +1,6 @@
+defaults:
+  - _self_
+  - config_train_schema
+  - model: baseline
+  - train: normal
+  - data: default

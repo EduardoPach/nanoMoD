@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+  - config_search_schema
+  - model: baseline
+  - train: dnas/default
+  - dnas: default
+  - data: default
